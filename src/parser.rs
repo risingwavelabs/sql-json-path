@@ -3,10 +3,11 @@
 use crate::node::*;
 use nom::{
     branch::alt,
-    bytes::complete::{tag, tag_no_case},
+    bytes::complete::{tag, tag_no_case, take_while, take_while1},
     character::complete::{char, i32, i64, multispace0 as s, u64},
-    combinator::{map, value},
-    multi::{many0, separated_list1},
+    combinator::{cut, map, value, verify},
+    error::context,
+    multi::{fold_many0, many0, separated_list1},
     number::complete::double,
     sequence::{delimited, pair, preceded, separated_pair, tuple},
     Finish, IResult, Offset,
@@ -47,7 +48,7 @@ impl Error {
 
 fn json_path(input: &str) -> IResult<&str, JsonPath<'_>> {
     map(
-        delimited(s, pair(mode, alt((expr, predicate))), s),
+        delimited(s, separated_pair(mode, s, alt((expr, predicate))), s),
         |(mode, expr)| JsonPath { mode, expr },
     )(input)
 }
@@ -150,6 +151,7 @@ fn accessor_op(input: &str) -> IResult<&str, AccessorOp<'_>> {
         map(dot_field, AccessorOp::Member),
         map(array_accessor, AccessorOp::Element),
         map(filter_expr, |expr| AccessorOp::FilterExpr(Box::new(expr))),
+        map(item_method, AccessorOp::Method),
     ))(input)
 }
 
@@ -224,6 +226,26 @@ fn arith_op(input: &str) -> IResult<&str, BinaryOp> {
     ))(input)
 }
 
+fn item_method(input: &str) -> IResult<&str, Method> {
+    delimited(
+        pair(char('.'), s),
+        method,
+        tuple((s, char('('), s, char(')'))),
+    )(input)
+}
+
+fn method(input: &str) -> IResult<&str, Method> {
+    alt((
+        value(Method::Type, tag("type")),
+        value(Method::Size, tag("size")),
+        value(Method::Double, tag("double")),
+        value(Method::Ceiling, tag("ceiling")),
+        value(Method::Floor, tag("floor")),
+        value(Method::Abs, tag("abs")),
+        value(Method::Keyvalue, tag("keyvalue")),
+    ))(input)
+}
+
 fn scalar_value(input: &str) -> IResult<&str, Value<'_>> {
     alt((
         value(Value::Null, tag("null")),
@@ -246,9 +268,83 @@ fn variable(input: &str) -> IResult<&str, Cow<'_, str>> {
 }
 
 fn string(input: &str) -> IResult<&str, Cow<'_, str>> {
-    todo!()
+    context(
+        "double quoted string",
+        delimited(
+            char('"'),
+            fold_many0(
+                alt((
+                    map(unescaped_str, Cow::Borrowed),
+                    map(escaped_char, |s| Cow::Owned(s.into())),
+                )),
+                || Cow::Borrowed(""),
+                |mut string, fragment| match string {
+                    Cow::Borrowed("") => fragment,
+                    _ => {
+                        string.to_mut().push_str(&fragment);
+                        string
+                    }
+                },
+            ),
+            cut(char('"')),
+        ),
+    )(input)
+}
+
+fn escaped_char(input: &str) -> IResult<&str, char> {
+    context(
+        "escaped character",
+        preceded(
+            char('\\'),
+            alt((
+                value('\u{0008}', char('b')),
+                value('\u{0009}', char('t')),
+                value('\u{000A}', char('n')),
+                value('\u{000C}', char('f')),
+                value('\u{000D}', char('r')),
+                value('\u{002F}', char('/')),
+                value('\u{005C}', char('\\')),
+                value('\u{0022}', char('"')),
+                // unicode_sequence,
+            )),
+        ),
+    )(input)
+}
+
+fn unescaped_str(input: &str) -> IResult<&str, &str> {
+    context(
+        "unescaped character",
+        verify(take_while(|chr| is_valid_unescaped_char(chr)), |s: &str| {
+            !s.is_empty()
+        }),
+    )(input)
+}
+
+fn is_valid_unescaped_char(chr: char) -> bool {
+    match chr {
+        '"' => false,
+        '\u{20}'..='\u{5B}' // Omit control characters
+        | '\u{5D}'..='\u{10FFFF}' => true, // Omit \
+        _ => false,
+    }
 }
 
 fn raw_string(input: &str) -> IResult<&str, Cow<'_, str>> {
-    todo!()
+    map(
+        take_while1(|c: char| c.is_ascii_alphanumeric() || c == '_' || c >= '\u{0080}'),
+        Cow::Borrowed,
+    )(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_json_path() {
+        JsonPath::from_str(r#"lax $.name ? (@ starts with "O''")"#).unwrap();
+        JsonPath::from_str(r#"lax $.name ? (@ starts with "\"hello")"#).unwrap();
+        // JsonPath::from_str(r#"lax $.name ? (@ starts with "O\u0027")"#).unwrap();
+        // JsonPath::from_str(r#"lax $.name ? (@ starts with "\u0022hello")"#).unwrap();
+    }
 }

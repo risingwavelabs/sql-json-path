@@ -95,6 +95,8 @@ pub enum AccessorOp<'a> {
     Element(Vec<ArrayIndex>),
     /// `?(<expression>)` represents selecting all elements in an object or array that match the filter expression, like `$.book[?(@.price < 10)]`.
     FilterExpr(Box<Expr<'a>>),
+    /// `.method()` represents calling a method.
+    Method(Method),
 }
 
 /// Represents the single index in an Array.
@@ -178,6 +180,17 @@ pub enum BinaryOp {
     StartsWith,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Method {
+    Type,
+    Size,
+    Double,
+    Ceiling,
+    Floor,
+    Abs,
+    Keyvalue,
+}
+
 impl<'a> Display for JsonPath<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}", self.mode, self.expr)
@@ -252,6 +265,7 @@ impl<'a> Display for AccessorOp<'a> {
             Self::Member(field) => write!(f, ".{field}"),
             Self::Element(indices) => f.debug_list().entries(indices).finish(),
             Self::FilterExpr(expr) => write!(f, "?({expr})"),
+            Self::Method(method) => write!(f, ".{method}()"),
         }
     }
 }
@@ -297,6 +311,20 @@ impl Display for BinaryOp {
             Self::Div => write!(f, "/"),
             Self::Mod => write!(f, "%"),
             Self::StartsWith => write!(f, "starts with"),
+        }
+    }
+}
+
+impl Display for Method {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Type => write!(f, "type"),
+            Self::Size => write!(f, "size"),
+            Self::Double => write!(f, "double"),
+            Self::Ceiling => write!(f, "ceiling"),
+            Self::Floor => write!(f, "floor"),
+            Self::Abs => write!(f, "abs"),
+            Self::Keyvalue => write!(f, "keyvalue"),
         }
     }
 }
