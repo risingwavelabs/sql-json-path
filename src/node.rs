@@ -10,7 +10,7 @@ use serde_json::Number;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonPath {
     pub(crate) mode: Mode,
-    pub(crate) expr: Expr,
+    pub(crate) expr: ExprOrPredicate,
 }
 
 /// The mode of JSON Path.
@@ -21,6 +21,13 @@ pub enum Mode {
     Lax,
     /// Strict mode raises an error if the data does not strictly adhere to the requirements of a path expression.
     Strict,
+}
+
+/// An expression or predicate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExprOrPredicate {
+    Expr(Expr),
+    Pred(Predicate),
 }
 
 /// An expression in JSON Path.
@@ -39,10 +46,6 @@ pub enum Expr {
 }
 
 impl Expr {
-    pub(crate) fn value(v: Value) -> Self {
-        Self::Accessor(PathPrimary::Value(v), vec![])
-    }
-
     pub(crate) fn unary(op: UnaryOp, expr: Self) -> Self {
         Self::UnaryOp {
             op,
@@ -57,6 +60,23 @@ impl Expr {
             right: Box::new(right),
         }
     }
+}
+
+///
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Predicate {
+    /// Compare operation
+    Compare {
+        op: CompareOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Exists(Box<Expr>),
+    And(Box<Predicate>, Box<Predicate>),
+    Or(Box<Predicate>, Box<Predicate>),
+    Not(Box<Predicate>),
+    IsUnknown(Box<Predicate>),
+    StartsWith(Box<Expr>, Value),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,7 +113,7 @@ pub enum AccessorOp {
     /// the last two, and the sixth element in an Array.
     Element(Vec<ArrayIndex>),
     /// `?(<expression>)` represents selecting all elements in an object or array that match the filter expression, like `$.book[?(@.price < 10)]`.
-    FilterExpr(Box<Expr>),
+    FilterExpr(Box<Predicate>),
     /// `.method()` represents calling a method.
     Method(Method),
 }
@@ -131,28 +151,9 @@ pub enum Value {
     Variable(String),
 }
 
-/// A unary operator.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UnaryOp {
-    /// `+` represents plus.
-    Plus,
-    /// `-` represents minus.
-    Minus,
-    /// `!` represents logical Not operation.
-    Not,
-    /// `exists`
-    Exists,
-    /// `is unknown`
-    IsUnknown,
-}
-
 /// A binary operator.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BinaryOp {
-    /// `&&` represents logical And operation.
-    And,
-    /// `||` represents logical Or operation.
-    Or,
+pub enum CompareOp {
     /// `==` represents left is equal to right.
     Eq,
     /// `!=` and `<>` represents left is not equal to right.
@@ -165,6 +166,20 @@ pub enum BinaryOp {
     Gt,
     /// `>=` represents left is greater than or equal to right.
     Ge,
+}
+
+/// A unary operator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnaryOp {
+    /// `+` represents plus.
+    Plus,
+    /// `-` represents minus.
+    Minus,
+}
+
+/// A binary operator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BinaryOp {
     /// `+` represents left plus right.
     Add,
     /// `-` represents left minus right.
@@ -175,8 +190,6 @@ pub enum BinaryOp {
     Div,
     /// `%` represents left mod right.
     Mod,
-    /// `starts with`
-    StartsWith,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,6 +214,29 @@ impl Display for Mode {
         match self {
             Self::Lax => write!(f, "lax"),
             Self::Strict => write!(f, "strict"),
+        }
+    }
+}
+
+impl Display for ExprOrPredicate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Expr(expr) => write!(f, "{}", expr),
+            Self::Pred(pred) => write!(f, "{}", pred),
+        }
+    }
+}
+
+impl Display for Predicate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Compare { op, left, right } => write!(f, "({left} {op} {right})"),
+            Self::Exists(expr) => write!(f, "exists({expr})"),
+            Self::And(left, right) => write!(f, "({left} && {right})"),
+            Self::Or(left, right) => write!(f, "({left} || {right})"),
+            Self::Not(expr) => write!(f, "!({expr})"),
+            Self::IsUnknown(expr) => write!(f, "{expr} is unknown"),
+            Self::StartsWith(expr, v) => write!(f, "({expr} starts with {v})"),
         }
     }
 }
@@ -286,9 +322,19 @@ impl Display for UnaryOp {
         match self {
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
-            Self::Not => write!(f, "!"),
-            Self::Exists => write!(f, "exists"),
-            Self::IsUnknown => write!(f, "is unknown"),
+        }
+    }
+}
+
+impl Display for CompareOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Eq => write!(f, "=="),
+            Self::NotEq => write!(f, "!="),
+            Self::Lt => write!(f, "<"),
+            Self::Le => write!(f, "<="),
+            Self::Gt => write!(f, ">"),
+            Self::Ge => write!(f, ">="),
         }
     }
 }
@@ -296,20 +342,11 @@ impl Display for UnaryOp {
 impl Display for BinaryOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::And => write!(f, "&&"),
-            Self::Or => write!(f, "||"),
-            Self::Eq => write!(f, "=="),
-            Self::NotEq => write!(f, "!="),
-            Self::Lt => write!(f, "<"),
-            Self::Le => write!(f, "<="),
-            Self::Gt => write!(f, ">"),
-            Self::Ge => write!(f, ">="),
             Self::Add => write!(f, "+"),
             Self::Sub => write!(f, "-"),
             Self::Mul => write!(f, "*"),
             Self::Div => write!(f, "/"),
             Self::Mod => write!(f, "%"),
-            Self::StartsWith => write!(f, "starts with"),
         }
     }
 }

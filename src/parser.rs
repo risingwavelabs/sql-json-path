@@ -26,7 +26,7 @@ impl FromStr for JsonPath {
         if !rest.is_empty() {
             return Err(Error {
                 position: s.offset(rest),
-                message: "unexpected trailing characters".into(),
+                message: format!("unexpected trailing characters: {rest}").into(),
             });
         }
         Ok(json_path)
@@ -50,7 +50,18 @@ impl Error {
 
 fn json_path(input: &str) -> IResult<&str, JsonPath> {
     map(
-        delimited(s, separated_pair(mode, s, alt((expr, predicate))), s),
+        delimited(
+            s,
+            separated_pair(
+                mode,
+                s,
+                alt((
+                    map(expr, ExprOrPredicate::Expr),
+                    map(predicate, ExprOrPredicate::Pred),
+                )),
+            ),
+            s,
+        ),
         |(mode, expr)| JsonPath { mode, expr },
     )(input)
 }
@@ -63,31 +74,24 @@ fn mode(input: &str) -> IResult<&str, Mode> {
     ))(input)
 }
 
-fn predicate(input: &str) -> IResult<&str, Expr> {
+fn predicate(input: &str) -> IResult<&str, Predicate> {
     alt((
         delimited_predicate,
         map(
             tuple((expr, delimited(s, cmp_op, s), expr)),
-            |(left, op, right)| Expr::binary(op, left, right),
+            |(left, op, right)| Predicate::Compare {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
         ),
-        map(
-            tuple((expr, delimited(s, tag("&&"), s), expr)),
-            |(left, _, right)| Expr::binary(BinaryOp::And, left, right),
-        ),
-        map(
-            tuple((expr, delimited(s, tag("||"), s), expr)),
-            |(left, _, right)| Expr::binary(BinaryOp::Or, left, right),
-        ),
-        map(preceded(pair(tag("not"), s), delimited_predicate), |expr| {
-            Expr::unary(UnaryOp::Not, expr)
-        }),
         map(
             delimited(
                 pair(char('('), s),
                 predicate,
                 tuple((s, char(')'), s, tag("is"), s, tag("unknown"))),
             ),
-            |expr| Expr::unary(UnaryOp::IsUnknown, expr),
+            |p| Predicate::IsUnknown(Box::new(p)),
         ),
         map(
             separated_pair(
@@ -95,12 +99,23 @@ fn predicate(input: &str) -> IResult<&str, Expr> {
                 tuple((s, tag("starts"), s, tag("with"), s)),
                 starts_with_literal,
             ),
-            |(expr, literal)| Expr::binary(BinaryOp::StartsWith, expr, Expr::value(literal)),
+            |(expr, literal)| Predicate::StartsWith(Box::new(expr), literal),
+        ),
+        map(preceded(pair(tag("!"), s), delimited_predicate), |p| {
+            Predicate::Not(Box::new(p))
+        }),
+        map(
+            separated_pair(predicate, delimited(s, tag("&&"), s), predicate),
+            |(left, right)| Predicate::And(Box::new(left), Box::new(right)),
+        ),
+        map(
+            separated_pair(predicate, delimited(s, tag("||"), s), predicate),
+            |(left, right)| Predicate::Or(Box::new(left), Box::new(right)),
         ),
     ))(input)
 }
 
-fn delimited_predicate(input: &str) -> IResult<&str, Expr> {
+fn delimited_predicate(input: &str) -> IResult<&str, Predicate> {
     alt((
         delimited(pair(char('('), s), predicate, pair(s, char(')'))),
         map(
@@ -109,7 +124,7 @@ fn delimited_predicate(input: &str) -> IResult<&str, Expr> {
                 expr,
                 pair(s, char(')')),
             ),
-            |expr| Expr::unary(UnaryOp::Exists, expr),
+            |expr| Predicate::Exists(Box::new(expr)),
         ),
     ))(input)
 }
@@ -149,19 +164,19 @@ fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
 fn accessor_op(input: &str) -> IResult<&str, AccessorOp> {
     alt((
         value(AccessorOp::MemberWildcard, tag(".*")),
-        value(AccessorOp::ElementWildcard, bracket_wildcard),
-        map(dot_field, AccessorOp::Member),
+        value(AccessorOp::ElementWildcard, element_wildcard),
+        map(member_accessor, AccessorOp::Member),
         map(array_accessor, AccessorOp::Element),
         map(filter_expr, |expr| AccessorOp::FilterExpr(Box::new(expr))),
         map(item_method, AccessorOp::Method),
     ))(input)
 }
 
-fn bracket_wildcard(input: &str) -> IResult<&str, ()> {
+fn element_wildcard(input: &str) -> IResult<&str, ()> {
     value((), tuple((char('['), s, char('*'), s, char(']'))))(input)
 }
 
-fn dot_field(input: &str) -> IResult<&str, String> {
+fn member_accessor(input: &str) -> IResult<&str, String> {
     preceded(pair(char('.'), s), alt((string, raw_string)))(input)
 }
 
@@ -198,7 +213,7 @@ fn index_elem(input: &str) -> IResult<&str, ArrayIndex> {
     ))(input)
 }
 
-fn filter_expr(input: &str) -> IResult<&str, Expr> {
+fn filter_expr(input: &str) -> IResult<&str, Predicate> {
     delimited(
         tuple((char('?'), s, char('('), s)),
         predicate,
@@ -206,15 +221,15 @@ fn filter_expr(input: &str) -> IResult<&str, Expr> {
     )(input)
 }
 
-fn cmp_op(input: &str) -> IResult<&str, BinaryOp> {
+fn cmp_op(input: &str) -> IResult<&str, CompareOp> {
     alt((
-        value(BinaryOp::Eq, tag("==")),
-        value(BinaryOp::NotEq, tag("!=")),
-        value(BinaryOp::NotEq, tag("<>")),
-        value(BinaryOp::Le, tag("<=")),
-        value(BinaryOp::Lt, char('<')),
-        value(BinaryOp::Ge, tag(">=")),
-        value(BinaryOp::Gt, char('>')),
+        value(CompareOp::Eq, tag("==")),
+        value(CompareOp::NotEq, tag("!=")),
+        value(CompareOp::NotEq, tag("<>")),
+        value(CompareOp::Le, tag("<=")),
+        value(CompareOp::Lt, char('<')),
+        value(CompareOp::Ge, tag(">=")),
+        value(CompareOp::Gt, char('>')),
     ))(input)
 }
 
