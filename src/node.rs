@@ -119,12 +119,34 @@ pub enum AccessorOp {
 }
 
 /// Represents the single index in an Array.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Index {
     /// The 0-based index in an Array.
     Index(i32),
     /// The last n-th index in an Array.
     LastIndex(i32),
+}
+
+impl Index {
+    /// Converts the index to usize. Returns None if the index is out of range.
+    pub(crate) fn to_usize(self, len: usize) -> Option<usize> {
+        match self {
+            Self::Index(idx) => {
+                if idx >= 0 && idx < len as i32 {
+                    Some(idx as usize)
+                } else {
+                    None
+                }
+            }
+            Self::LastIndex(idx) => {
+                if idx >= 0 && idx < len as i32 {
+                    Some(len - idx as usize)
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }
 
 /// Represents the index in an Array.
@@ -157,7 +179,7 @@ pub enum CompareOp {
     /// `==` represents left is equal to right.
     Eq,
     /// `!=` and `<>` represents left is not equal to right.
-    NotEq,
+    Ne,
     /// `<` represents left is less than right.
     Lt,
     /// `<=` represents left is less or equal to right.
@@ -330,7 +352,7 @@ impl Display for CompareOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Eq => write!(f, "=="),
-            Self::NotEq => write!(f, "!="),
+            Self::Ne => write!(f, "!="),
             Self::Lt => write!(f, "<"),
             Self::Le => write!(f, "<="),
             Self::Gt => write!(f, ">"),

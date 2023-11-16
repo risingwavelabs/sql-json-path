@@ -224,8 +224,8 @@ fn filter_expr(input: &str) -> IResult<&str, Predicate> {
 fn cmp_op(input: &str) -> IResult<&str, CompareOp> {
     alt((
         value(CompareOp::Eq, tag("==")),
-        value(CompareOp::NotEq, tag("!=")),
-        value(CompareOp::NotEq, tag("<>")),
+        value(CompareOp::Ne, tag("!=")),
+        value(CompareOp::Ne, tag("<>")),
         value(CompareOp::Le, tag("<=")),
         value(CompareOp::Lt, char('<')),
         value(CompareOp::Ge, tag(">=")),
