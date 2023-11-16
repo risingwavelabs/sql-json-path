@@ -1,5 +1,6 @@
 //! JSON Path parser.
 
+use crate::node::*;
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case},
@@ -11,8 +12,6 @@ use nom::{
     Finish, IResult, Offset,
 };
 use serde_json::Number;
-
-use crate::node::*;
 use std::borrow::Cow;
 
 impl<'a> JsonPath<'a> {
@@ -93,7 +92,7 @@ fn predicate(input: &str) -> IResult<&str, Expr<'_>> {
                 tuple((s, tag("starts"), s, tag("with"), s)),
                 starts_with_literal,
             ),
-            |(expr, literal)| Expr::binary(BinaryOp::StartsWith, expr, Expr::Value(literal)),
+            |(expr, literal)| Expr::binary(BinaryOp::StartsWith, expr, Expr::value(literal)),
         ),
     ))(input)
 }
@@ -140,6 +139,7 @@ fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
     alt((
         value(PathPrimary::Root, char('$')),
         value(PathPrimary::Current, char('@')),
+        map(scalar_value, PathPrimary::Value),
     ))(input)
 }
 
@@ -149,6 +149,7 @@ fn accessor_op(input: &str) -> IResult<&str, AccessorOp<'_>> {
         value(AccessorOp::ElementWildcard, bracket_wildcard),
         map(dot_field, AccessorOp::Member),
         map(array_accessor, AccessorOp::Element),
+        map(filter_expr, |expr| AccessorOp::FilterExpr(Box::new(expr))),
     ))(input)
 }
 

@@ -28,9 +28,7 @@ pub enum Mode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr<'a> {
     /// Accessor expression.
-    Accessor(PathPrimary, Vec<AccessorOp<'a>>),
-    /// Literal value.
-    Value(Value<'a>),
+    Accessor(PathPrimary<'a>, Vec<AccessorOp<'a>>),
     /// Unary operation.
     UnaryOp { op: UnaryOp, expr: Box<Expr<'a>> },
     /// Binary operation.
@@ -41,7 +39,11 @@ pub enum Expr<'a> {
     },
 }
 
-impl Expr<'_> {
+impl<'a> Expr<'a> {
+    pub(crate) fn value(v: Value<'a>) -> Self {
+        Self::Accessor(PathPrimary::Value(v), vec![])
+    }
+
     pub(crate) fn unary(op: UnaryOp, expr: Self) -> Self {
         Self::UnaryOp {
             op,
@@ -59,11 +61,13 @@ impl Expr<'_> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PathPrimary {
+pub enum PathPrimary<'a> {
     /// `$` represents the root node or element.
     Root,
     /// `@` represents the current node or element being processed in the filter expression.
     Current,
+    /// Literal value.
+    Value(Value<'a>),
 }
 
 /// Represents a valid JSON Path.
@@ -199,7 +203,6 @@ impl<'a> Display for Expr<'a> {
                 }
                 Ok(())
             }
-            Expr::Value(v) => write!(f, "{v}"),
             Expr::UnaryOp { op, expr } => write!(f, "{op} {expr}"),
             Expr::BinaryOp { op, left, right } => write!(f, "({left} {op} {right})"),
         }
@@ -231,11 +234,12 @@ impl Display for Index {
     }
 }
 
-impl<'a> Display for PathPrimary {
+impl<'a> Display for PathPrimary<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Root => write!(f, "$"),
             Self::Current => write!(f, "@"),
+            Self::Value(v) => write!(f, "{v}"),
         }
     }
 }
