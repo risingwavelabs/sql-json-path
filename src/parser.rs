@@ -1,35 +1,59 @@
+//! JSON Path parser.
+
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case},
     character::complete::{char, i32, i64, multispace0 as s, u64},
     combinator::{map, value},
-    error::{Error, ErrorKind},
     multi::{many0, separated_list1},
     number::complete::double,
     sequence::{delimited, pair, preceded, separated_pair, tuple},
-    IResult,
+    Finish, IResult, Offset,
 };
 use serde_json::Number;
 
 use crate::node::*;
 use std::borrow::Cow;
 
-/// Parsing the input string to JSON Path.
-pub fn parse_json_path(input: &[u8]) -> Result<JsonPath<'_>, Error<&[u8]>> {
-    let (rest, json_path) = json_path(input)?;
-    if !rest.is_empty() {
-        return Err(Error::new(rest, ErrorKind::Eof));
+impl<'a> JsonPath<'a> {
+    /// Parse a JSON Path from string.
+    pub fn from_str(s: &'a str) -> Result<Self, Error> {
+        let (rest, json_path) = json_path(s)
+            .finish()
+            .map_err(|e| Error::from_input_error(s, e))?;
+        if !rest.is_empty() {
+            return Err(Error {
+                position: s.offset(rest),
+                message: "unexpected trailing characters".into(),
+            });
+        }
+        Ok(json_path)
     }
-    Ok(json_path)
 }
 
-fn json_path(input: &[u8]) -> IResult<&[u8], JsonPath<'_>> {
-    map(pair(mode, alt((expr, predicate))), |(mode, expr)| {
-        JsonPath { mode, expr }
-    })(input)
+#[derive(Debug, thiserror::Error)]
+#[error("at position {position}, {message}")]
+pub struct Error {
+    position: usize,
+    message: Box<str>,
 }
 
-fn mode(input: &[u8]) -> IResult<&[u8], Mode> {
+impl Error {
+    fn from_input_error(input: &str, err: nom::error::Error<&str>) -> Self {
+        let position = input.offset(err.input);
+        let message = err.to_string().into();
+        Self { position, message }
+    }
+}
+
+fn json_path(input: &str) -> IResult<&str, JsonPath<'_>> {
+    map(
+        delimited(s, pair(mode, alt((expr, predicate))), s),
+        |(mode, expr)| JsonPath { mode, expr },
+    )(input)
+}
+
+fn mode(input: &str) -> IResult<&str, Mode> {
     alt((
         value(Mode::Strict, tag("strict")),
         value(Mode::Lax, tag("lax")),
@@ -37,7 +61,7 @@ fn mode(input: &[u8]) -> IResult<&[u8], Mode> {
     ))(input)
 }
 
-fn predicate(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
+fn predicate(input: &str) -> IResult<&str, Expr<'_>> {
     alt((
         delimited_predicate,
         map(
@@ -74,7 +98,7 @@ fn predicate(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
     ))(input)
 }
 
-fn delimited_predicate(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
+fn delimited_predicate(input: &str) -> IResult<&str, Expr<'_>> {
     alt((
         delimited(pair(char('('), s), predicate, pair(s, char(')'))),
         map(
@@ -88,7 +112,7 @@ fn delimited_predicate(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
     ))(input)
 }
 
-fn expr(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
+fn expr(input: &str) -> IResult<&str, Expr<'_>> {
     alt((
         accessor_expr,
         delimited(pair(char('('), s), expr, pair(s, char(')'))),
@@ -105,21 +129,21 @@ fn expr(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
     ))(input)
 }
 
-fn accessor_expr(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
+fn accessor_expr(input: &str) -> IResult<&str, Expr<'_>> {
     map(
         pair(path_primary, many0(preceded(s, accessor_op))),
         |(primary, ops)| Expr::Accessor(primary, ops),
     )(input)
 }
 
-fn path_primary(input: &[u8]) -> IResult<&[u8], PathPrimary> {
+fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
     alt((
         value(PathPrimary::Root, char('$')),
         value(PathPrimary::Current, char('@')),
     ))(input)
 }
 
-fn accessor_op(input: &[u8]) -> IResult<&[u8], AccessorOp<'_>> {
+fn accessor_op(input: &str) -> IResult<&str, AccessorOp<'_>> {
     alt((
         value(AccessorOp::MemberWildcard, tag(".*")),
         value(AccessorOp::ElementWildcard, bracket_wildcard),
@@ -128,15 +152,15 @@ fn accessor_op(input: &[u8]) -> IResult<&[u8], AccessorOp<'_>> {
     ))(input)
 }
 
-fn bracket_wildcard(input: &[u8]) -> IResult<&[u8], ()> {
+fn bracket_wildcard(input: &str) -> IResult<&str, ()> {
     value((), tuple((char('['), s, char('*'), s, char(']'))))(input)
 }
 
-fn dot_field(input: &[u8]) -> IResult<&[u8], Cow<'_, str>> {
+fn dot_field(input: &str) -> IResult<&str, Cow<'_, str>> {
     preceded(pair(char('.'), s), alt((string, raw_string)))(input)
 }
 
-fn index(input: &[u8]) -> IResult<&[u8], Index> {
+fn index(input: &str) -> IResult<&str, Index> {
     alt((
         map(i32, Index::Index),
         map(
@@ -151,7 +175,7 @@ fn index(input: &[u8]) -> IResult<&[u8], Index> {
     ))(input)
 }
 
-fn array_accessor(input: &[u8]) -> IResult<&[u8], Vec<ArrayIndex>> {
+fn array_accessor(input: &str) -> IResult<&str, Vec<ArrayIndex>> {
     delimited(
         char('['),
         separated_list1(char(','), delimited(s, index_elem, s)),
@@ -159,7 +183,7 @@ fn array_accessor(input: &[u8]) -> IResult<&[u8], Vec<ArrayIndex>> {
     )(input)
 }
 
-fn index_elem(input: &[u8]) -> IResult<&[u8], ArrayIndex> {
+fn index_elem(input: &str) -> IResult<&str, ArrayIndex> {
     alt((
         map(index, ArrayIndex::Index),
         map(
@@ -169,7 +193,7 @@ fn index_elem(input: &[u8]) -> IResult<&[u8], ArrayIndex> {
     ))(input)
 }
 
-fn filter_expr(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
+fn filter_expr(input: &str) -> IResult<&str, Expr<'_>> {
     delimited(
         tuple((char('?'), s, char('('), s)),
         predicate,
@@ -177,7 +201,7 @@ fn filter_expr(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
     )(input)
 }
 
-fn cmp_op(input: &[u8]) -> IResult<&[u8], BinaryOp> {
+fn cmp_op(input: &str) -> IResult<&str, BinaryOp> {
     alt((
         value(BinaryOp::Eq, tag("==")),
         value(BinaryOp::NotEq, tag("!=")),
@@ -189,7 +213,7 @@ fn cmp_op(input: &[u8]) -> IResult<&[u8], BinaryOp> {
     ))(input)
 }
 
-fn arith_op(input: &[u8]) -> IResult<&[u8], BinaryOp> {
+fn arith_op(input: &str) -> IResult<&str, BinaryOp> {
     alt((
         value(BinaryOp::Add, char('+')),
         value(BinaryOp::Sub, char('-')),
@@ -199,7 +223,7 @@ fn arith_op(input: &[u8]) -> IResult<&[u8], BinaryOp> {
     ))(input)
 }
 
-fn scalar_value(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+fn scalar_value(input: &str) -> IResult<&str, Value<'_>> {
     alt((
         value(Value::Null, tag("null")),
         value(Value::Boolean(true), tag("true")),
@@ -212,18 +236,18 @@ fn scalar_value(input: &[u8]) -> IResult<&[u8], Value<'_>> {
     ))(input)
 }
 
-fn starts_with_literal(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+fn starts_with_literal(input: &str) -> IResult<&str, Value<'_>> {
     alt((map(string, Value::String), map(variable, Value::Variable)))(input)
 }
 
-fn variable(input: &[u8]) -> IResult<&[u8], Cow<'_, str>> {
+fn variable(input: &str) -> IResult<&str, Cow<'_, str>> {
     preceded(char('$'), raw_string)(input)
 }
 
-fn string(input: &[u8]) -> IResult<&[u8], Cow<'_, str>> {
+fn string(input: &str) -> IResult<&str, Cow<'_, str>> {
     todo!()
 }
 
-fn raw_string(input: &[u8]) -> IResult<&[u8], Cow<'_, str>> {
+fn raw_string(input: &str) -> IResult<&str, Cow<'_, str>> {
     todo!()
 }

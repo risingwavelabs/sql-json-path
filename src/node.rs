@@ -1,3 +1,5 @@
+//! The AST of JSON Path.
+
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::Display;
@@ -40,14 +42,14 @@ pub enum Expr<'a> {
 }
 
 impl Expr<'_> {
-    pub(crate) fn unary(op: UnaryOp, expr: Expr) -> Self {
+    pub(crate) fn unary(op: UnaryOp, expr: Self) -> Self {
         Self::UnaryOp {
             op,
             expr: Box::new(expr),
         }
     }
 
-    pub(crate) fn binary(op: BinaryOp, left: Expr, right: Expr) -> Self {
+    pub(crate) fn binary(op: BinaryOp, left: Self, right: Self) -> Self {
         Self::BinaryOp {
             op,
             left: Box::new(left),
