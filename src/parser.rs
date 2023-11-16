@@ -13,11 +13,13 @@ use nom::{
     Finish, IResult, Offset,
 };
 use serde_json::Number;
-use std::borrow::Cow;
+use std::str::FromStr;
 
-impl<'a> JsonPath<'a> {
+impl FromStr for JsonPath {
+    type Err = Error;
+
     /// Parse a JSON Path from string.
-    pub fn from_str(s: &'a str) -> Result<Self, Error> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (rest, json_path) = json_path(s)
             .finish()
             .map_err(|e| Error::from_input_error(s, e))?;
@@ -46,7 +48,7 @@ impl Error {
     }
 }
 
-fn json_path(input: &str) -> IResult<&str, JsonPath<'_>> {
+fn json_path(input: &str) -> IResult<&str, JsonPath> {
     map(
         delimited(s, separated_pair(mode, s, alt((expr, predicate))), s),
         |(mode, expr)| JsonPath { mode, expr },
@@ -61,7 +63,7 @@ fn mode(input: &str) -> IResult<&str, Mode> {
     ))(input)
 }
 
-fn predicate(input: &str) -> IResult<&str, Expr<'_>> {
+fn predicate(input: &str) -> IResult<&str, Expr> {
     alt((
         delimited_predicate,
         map(
@@ -98,7 +100,7 @@ fn predicate(input: &str) -> IResult<&str, Expr<'_>> {
     ))(input)
 }
 
-fn delimited_predicate(input: &str) -> IResult<&str, Expr<'_>> {
+fn delimited_predicate(input: &str) -> IResult<&str, Expr> {
     alt((
         delimited(pair(char('('), s), predicate, pair(s, char(')'))),
         map(
@@ -112,7 +114,7 @@ fn delimited_predicate(input: &str) -> IResult<&str, Expr<'_>> {
     ))(input)
 }
 
-fn expr(input: &str) -> IResult<&str, Expr<'_>> {
+fn expr(input: &str) -> IResult<&str, Expr> {
     alt((
         accessor_expr,
         delimited(pair(char('('), s), expr, pair(s, char(')'))),
@@ -129,7 +131,7 @@ fn expr(input: &str) -> IResult<&str, Expr<'_>> {
     ))(input)
 }
 
-fn accessor_expr(input: &str) -> IResult<&str, Expr<'_>> {
+fn accessor_expr(input: &str) -> IResult<&str, Expr> {
     map(
         pair(path_primary, many0(preceded(s, accessor_op))),
         |(primary, ops)| Expr::Accessor(primary, ops),
@@ -144,7 +146,7 @@ fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
     ))(input)
 }
 
-fn accessor_op(input: &str) -> IResult<&str, AccessorOp<'_>> {
+fn accessor_op(input: &str) -> IResult<&str, AccessorOp> {
     alt((
         value(AccessorOp::MemberWildcard, tag(".*")),
         value(AccessorOp::ElementWildcard, bracket_wildcard),
@@ -159,7 +161,7 @@ fn bracket_wildcard(input: &str) -> IResult<&str, ()> {
     value((), tuple((char('['), s, char('*'), s, char(']'))))(input)
 }
 
-fn dot_field(input: &str) -> IResult<&str, Cow<'_, str>> {
+fn dot_field(input: &str) -> IResult<&str, String> {
     preceded(pair(char('.'), s), alt((string, raw_string)))(input)
 }
 
@@ -196,7 +198,7 @@ fn index_elem(input: &str) -> IResult<&str, ArrayIndex> {
     ))(input)
 }
 
-fn filter_expr(input: &str) -> IResult<&str, Expr<'_>> {
+fn filter_expr(input: &str) -> IResult<&str, Expr> {
     delimited(
         tuple((char('?'), s, char('('), s)),
         predicate,
@@ -246,7 +248,7 @@ fn method(input: &str) -> IResult<&str, Method> {
     ))(input)
 }
 
-fn scalar_value(input: &str) -> IResult<&str, Value<'_>> {
+fn scalar_value(input: &str) -> IResult<&str, Value> {
     alt((
         value(Value::Null, tag("null")),
         value(Value::Boolean(true), tag("true")),
@@ -259,29 +261,30 @@ fn scalar_value(input: &str) -> IResult<&str, Value<'_>> {
     ))(input)
 }
 
-fn starts_with_literal(input: &str) -> IResult<&str, Value<'_>> {
+fn starts_with_literal(input: &str) -> IResult<&str, Value> {
     alt((map(string, Value::String), map(variable, Value::Variable)))(input)
 }
 
-fn variable(input: &str) -> IResult<&str, Cow<'_, str>> {
+fn variable(input: &str) -> IResult<&str, String> {
     preceded(char('$'), raw_string)(input)
 }
 
-fn string(input: &str) -> IResult<&str, Cow<'_, str>> {
+fn string(input: &str) -> IResult<&str, String> {
     context(
         "double quoted string",
         delimited(
             char('"'),
             fold_many0(
                 alt((
-                    map(unescaped_str, Cow::Borrowed),
-                    map(escaped_char, |s| Cow::Owned(s.into())),
+                    map(unescaped_str, String::from),
+                    map(escaped_char, String::from),
                 )),
-                || Cow::Borrowed(""),
-                |mut string, fragment| match string {
-                    Cow::Borrowed("") => fragment,
-                    _ => {
-                        string.to_mut().push_str(&fragment);
+                String::new,
+                |mut string, fragment| {
+                    if string.is_empty() {
+                        fragment
+                    } else {
+                        string.push_str(&fragment);
                         string
                     }
                 },
@@ -329,10 +332,10 @@ fn is_valid_unescaped_char(chr: char) -> bool {
     }
 }
 
-fn raw_string(input: &str) -> IResult<&str, Cow<'_, str>> {
+fn raw_string(input: &str) -> IResult<&str, String> {
     map(
         take_while1(|c: char| c.is_ascii_alphanumeric() || c == '_' || c >= '\u{0080}'),
-        Cow::Borrowed,
+        String::from,
     )(input)
 }
 

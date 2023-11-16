@@ -1,6 +1,5 @@
 //! The AST of JSON Path.
 
-use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -9,9 +8,9 @@ use serde_json::Number;
 
 /// Represents a set of JSON Path chains.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JsonPath<'a> {
+pub struct JsonPath {
     pub(crate) mode: Mode,
-    pub(crate) expr: Expr<'a>,
+    pub(crate) expr: Expr,
 }
 
 /// The mode of JSON Path.
@@ -26,21 +25,21 @@ pub enum Mode {
 
 /// An expression in JSON Path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expr<'a> {
+pub enum Expr {
     /// Accessor expression.
-    Accessor(PathPrimary<'a>, Vec<AccessorOp<'a>>),
+    Accessor(PathPrimary, Vec<AccessorOp>),
     /// Unary operation.
-    UnaryOp { op: UnaryOp, expr: Box<Expr<'a>> },
+    UnaryOp { op: UnaryOp, expr: Box<Expr> },
     /// Binary operation.
     BinaryOp {
         op: BinaryOp,
-        left: Box<Expr<'a>>,
-        right: Box<Expr<'a>>,
+        left: Box<Expr>,
+        right: Box<Expr>,
     },
 }
 
-impl<'a> Expr<'a> {
-    pub(crate) fn value(v: Value<'a>) -> Self {
+impl Expr {
+    pub(crate) fn value(v: Value) -> Self {
         Self::Accessor(PathPrimary::Value(v), vec![])
     }
 
@@ -61,25 +60,25 @@ impl<'a> Expr<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PathPrimary<'a> {
+pub enum PathPrimary {
     /// `$` represents the root node or element.
     Root,
     /// `@` represents the current node or element being processed in the filter expression.
     Current,
     /// Literal value.
-    Value(Value<'a>),
+    Value(Value),
 }
 
 /// Represents a valid JSON Path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AccessorOp<'a> {
+pub enum AccessorOp {
     /// `.*` represents selecting all elements in an Object.
     MemberWildcard,
     /// `[*]` represents selecting all elements in an Array.
     ElementWildcard,
     /// `.<name>` represents selecting element that matched the name in an Object, like `$.event`.
     /// The name can also be written as a string literal, allowing the name to contain special characters, like `$." $price"`.
-    Member(Cow<'a, str>),
+    Member(String),
     /// `[<index1>,<index2>,..]` represents selecting elements specified by the indices in an Array.
     /// There are several forms of index.
     /// 1. A single number representing the 0-based `n-th` element in the Array.
@@ -94,7 +93,7 @@ pub enum AccessorOp<'a> {
     /// the last two, and the sixth element in an Array.
     Element(Vec<ArrayIndex>),
     /// `?(<expression>)` represents selecting all elements in an object or array that match the filter expression, like `$.book[?(@.price < 10)]`.
-    FilterExpr(Box<Expr<'a>>),
+    FilterExpr(Box<Expr>),
     /// `.method()` represents calling a method.
     Method(Method),
 }
@@ -119,7 +118,7 @@ pub enum ArrayIndex {
 
 /// Represents a scalar value.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Value<'a> {
+pub enum Value {
     /// Null value.
     Null,
     /// Boolean value.
@@ -127,9 +126,9 @@ pub enum Value<'a> {
     /// Number value.
     Number(Number),
     /// UTF-8 string.
-    String(Cow<'a, str>),
+    String(String),
     /// Variable
-    Variable(Cow<'a, str>),
+    Variable(String),
 }
 
 /// A unary operator.
@@ -191,13 +190,13 @@ pub enum Method {
     Keyvalue,
 }
 
-impl<'a> Display for JsonPath<'a> {
+impl Display for JsonPath {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}", self.mode, self.expr)
     }
 }
 
-impl<'a> Display for Mode {
+impl Display for Mode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Lax => write!(f, "lax"),
@@ -206,7 +205,7 @@ impl<'a> Display for Mode {
     }
 }
 
-impl<'a> Display for Expr<'a> {
+impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Accessor(primary, ops) => {
@@ -247,7 +246,7 @@ impl Display for Index {
     }
 }
 
-impl<'a> Display for PathPrimary<'a> {
+impl Display for PathPrimary {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Root => write!(f, "$"),
@@ -257,7 +256,7 @@ impl<'a> Display for PathPrimary<'a> {
     }
 }
 
-impl<'a> Display for AccessorOp<'a> {
+impl Display for AccessorOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MemberWildcard => write!(f, ".*"),
@@ -270,7 +269,7 @@ impl<'a> Display for AccessorOp<'a> {
     }
 }
 
-impl<'a> Display for Value<'a> {
+impl Display for Value {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Null => write!(f, "null"),
