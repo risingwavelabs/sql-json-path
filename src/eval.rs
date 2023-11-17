@@ -1,9 +1,11 @@
 use serde_json::Number;
 
 use crate::{
-    json::{ArrayRef, Json, JsonRef, ObjectRef},
+    json::{ArrayRef, Cow, Json, JsonRef, ObjectRef},
     node::*,
 };
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -14,13 +16,15 @@ pub enum Error {
     #[error("jsonpath array subscript is out of bounds")]
     ArrayIndexOutOfBounds,
     #[error("JSON object does not contain key \"{0}\"")]
-    NoKey(String),
+    NoKey(Box<str>),
+    #[error("operand of unary jsonpath operator {0} is not a numeric value")]
+    UnaryOperandNotNumeric(UnaryOp),
     #[error("left operand of jsonpath operator {0} is not a single numeric value")]
-    LeftOperandNotNumeric(String),
+    LeftOperandNotNumeric(BinaryOp),
     #[error("right operand of jsonpath operator {0} is not a single numeric value")]
-    RightOperandNotNumeric(String),
+    RightOperandNotNumeric(BinaryOp),
     #[error("could not find jsonpath variable \"{0}\"")]
-    NoVariable(String),
+    NoVariable(Box<str>),
     #[error("\"vars\" argument is not an object")]
     VarsNotObject,
     #[error("jsonpath item method .double() can only be applied to a string or numeric value")]
@@ -83,7 +87,7 @@ impl Truth {
         }
     }
 
-    fn to_json<T: JsonRef>(self) -> T {
+    fn to_json<T: Json>(self) -> T {
         match self {
             Truth::True => T::bool(true),
             Truth::False => T::bool(false),
@@ -93,27 +97,27 @@ impl Truth {
 }
 
 impl JsonPath {
-    pub fn query<T: JsonRef>(&self, value: T) -> Result<Vec<T>, Error> {
-        Query {
+    pub fn query<'a, T: Json>(&self, value: T::Borrowed<'a>) -> Result<Vec<Cow<'a, T>>> {
+        Evaluator {
             root: value,
             current: value,
-            vars: T::null(),
+            vars: T::Borrowed::null(),
             mode: self.mode,
         }
-        .query_expr_or_predicate(&self.expr)
+        .eval_expr_or_predicate(&self.expr)
     }
 }
 
-struct Query<T> {
-    current: T,
-    root: T,
-    vars: T,
+struct Evaluator<'a, T: Json> {
+    current: T::Borrowed<'a>,
+    root: T::Borrowed<'a>,
+    vars: T::Borrowed<'a>,
     // If the query is in lax mode, then errors are ignored and the result is empty or unknown.
     mode: Mode,
 }
 
-impl<T: JsonRef> Query<T> {
-    fn lax<O: Default>(&self, result: Result<O, Error>) -> Result<O, Error> {
+impl<'a, T: Json> Evaluator<'a, T> {
+    fn lax<O: Default>(&self, result: Result<O>) -> Result<O> {
         match self.mode {
             Mode::Lax => Ok(O::default()),
             _ => result,
@@ -124,7 +128,7 @@ impl<T: JsonRef> Query<T> {
         matches!(self.mode, Mode::Lax)
     }
 
-    fn with_current(&self, current: T) -> Self {
+    fn with_current(&self, current: T::Borrowed<'a>) -> Self {
         Self {
             current: current,
             root: self.root,
@@ -133,28 +137,30 @@ impl<T: JsonRef> Query<T> {
         }
     }
 
-    fn get_variable(&self, name: &str) -> Result<T, Error> {
+    fn get_variable(&self, name: &str) -> Result<T::Borrowed<'a>> {
         self.vars
             .as_object()
             .ok_or_else(|| Error::VarsNotObject)?
             .get(name)
-            .ok_or_else(|| Error::NoVariable(name.to_string()))
+            .ok_or_else(|| Error::NoVariable(name.into()))
     }
 
-    fn query_expr_or_predicate(&self, expr: &ExprOrPredicate) -> Result<Vec<T>, Error> {
+    fn eval_expr_or_predicate(&self, expr: &ExprOrPredicate) -> Result<Vec<Cow<'a, T>>> {
         match expr {
-            ExprOrPredicate::Expr(expr) => self.query_expr(expr),
-            ExprOrPredicate::Pred(pred) => self.query_predicate(pred).map(|t| vec![t.to_json()]),
+            ExprOrPredicate::Expr(expr) => self.eval_expr(expr),
+            ExprOrPredicate::Pred(pred) => self
+                .eval_predicate(pred)
+                .map(|t| vec![Cow::Owned(t.to_json())]),
         }
     }
 
-    fn query_predicate(&self, pred: &Predicate) -> Result<Truth, Error> {
+    fn eval_predicate(&self, pred: &Predicate) -> Result<Truth> {
         match pred {
             Predicate::Compare { op, left, right } => {
-                let Ok(left) = self.query_expr(left) else {
+                let Ok(left) = self.eval_expr(left) else {
                     return Ok(Truth::Unknown);
                 };
-                let Ok(right) = self.query_expr(right) else {
+                let Ok(right) = self.eval_expr(right) else {
                     return Ok(Truth::Unknown);
                 };
 
@@ -162,9 +168,9 @@ impl<T: JsonRef> Query<T> {
                 let mut any_true = false;
                 // The cross product of these SQL/JSON sequences is formed.
                 // Each SQL/JSON item in one SQL/JSON sequence is compared to each item in the other SQL/JSON sequence.
-                for l in left {
-                    for r in right {
-                        let res = self.compare(*op, l, r);
+                for l in left.iter() {
+                    for r in right.iter() {
+                        let res = eval_compare::<T>(*op, l.as_ref(), r.as_ref());
                         // The predicate is Unknown if there any pair of SQL/JSON items in the cross product is not comparable.
                         if res.is_unknown() {
                             // In lax mode, the path engine is permitted to stop evaluation early if it detects either an error or a success.
@@ -179,7 +185,7 @@ impl<T: JsonRef> Query<T> {
                             if self.is_lax() {
                                 return Ok(Truth::True);
                             }
-                            any_unknown = true;
+                            any_true = true;
                         }
                         // In strict mode, the path engine must test all comparisons in the cross product.
                     }
@@ -196,7 +202,7 @@ impl<T: JsonRef> Query<T> {
                 })
             }
             Predicate::Exists(expr) => {
-                let Ok(set) = self.query_expr(expr) else {
+                let Ok(set) = self.eval_expr(expr) else {
                     // If the result of the path expression is an error, then result is Unknown.
                     return Ok(Truth::Unknown);
                 };
@@ -205,31 +211,32 @@ impl<T: JsonRef> Query<T> {
                 Ok(Truth::from(!set.is_empty()))
             }
             Predicate::And(left, right) => {
-                let left = self.query_predicate(left)?;
-                let right = self.query_predicate(right)?;
+                let left = self.eval_predicate(left)?;
+                let right = self.eval_predicate(right)?;
                 Ok(left.and(right))
             }
             Predicate::Or(left, right) => {
-                let left = self.query_predicate(left)?;
-                let right = self.query_predicate(right)?;
+                let left = self.eval_predicate(left)?;
+                let right = self.eval_predicate(right)?;
                 Ok(left.or(right))
             }
             Predicate::Not(inner) => {
-                let inner = self.query_predicate(inner)?;
+                let inner = self.eval_predicate(inner)?;
                 Ok(inner.not())
             }
             Predicate::IsUnknown(inner) => {
-                let inner = self.query_predicate(inner)?;
+                let inner = self.eval_predicate(inner)?;
                 Ok(Truth::from(inner.is_unknown()))
             }
             Predicate::StartsWith(expr, prefix) => {
-                let Ok(set) = self.query_expr(expr) else {
+                let Ok(set) = self.eval_expr(expr) else {
                     return Ok(Truth::Unknown);
                 };
-                let prefix = self.query_value(prefix)?.as_str().unwrap();
+                let prefix = self.eval_value(prefix)?;
+                let prefix = prefix.as_ref().as_str().unwrap();
                 let mut result = Truth::False;
                 for v in set {
-                    let res = v.as_str().map_or(false, |s| s.starts_with(prefix));
+                    let res = v.as_ref().as_str().map_or(false, |s| s.starts_with(prefix));
                     result = result.or(res.into());
                     if result.is_true() {
                         break;
@@ -240,68 +247,87 @@ impl<T: JsonRef> Query<T> {
         }
     }
 
-    fn query_expr(&self, expr: &Expr) -> Result<Vec<T>, Error> {
+    fn eval_expr(&self, expr: &Expr) -> Result<Vec<Cow<'a, T>>> {
         match expr {
             Expr::Accessor(primary, ops) => {
-                let mut set = self.query_path_primary(primary);
+                let mut set = vec![self.eval_path_primary(primary)?];
+                let mut new_set = vec![];
                 for op in ops {
-                    let new_set = vec![];
-                    for v in set {
-                        new_set.extend(self.with_current(v).query_path_op(op)?);
+                    for v in &set {
+                        let Cow::Borrowed(v) = v else {
+                            panic!("access on owned value is not supported");
+                        };
+                        new_set.extend(self.with_current(*v).eval_accessor_op(op)?);
                     }
-                    set = new_set;
+                    std::mem::swap(&mut set, &mut new_set);
+                    new_set.clear();
                 }
                 Ok(set)
             }
             Expr::UnaryOp { op, expr } => {
-                let mut set = self.query_expr(expr)?;
-                for v in &mut set {
-                    *v = self.query_unary_op(op, *v)?;
+                let set = self.eval_expr(expr)?;
+                let mut new_set = Vec::with_capacity(set.len());
+                for v in set {
+                    new_set.push(Cow::Owned(eval_unary_op(*op, v.as_ref())?));
                 }
-                Ok(set)
+                Ok(new_set)
             }
             Expr::BinaryOp { op, left, right } => {
-                let left = self.query_expr(left)?;
-                let right = self.query_expr(right)?;
+                let left = self.eval_expr(left)?;
+                let right = self.eval_expr(right)?;
                 if left.len() != 1 {
-                    return Err(Error::LeftOperandNotNumeric(op.to_string()));
+                    return Err(Error::LeftOperandNotNumeric(*op));
                 }
                 if right.len() != 1 {
-                    return Err(Error::RightOperandNotNumeric(op.to_string()));
+                    return Err(Error::RightOperandNotNumeric(*op));
                 }
-                Ok(vec![self.query_binary_op(op, left[0], right[0])?])
+                Ok(vec![Cow::Owned(eval_binary_op(
+                    *op,
+                    left[0].as_ref(),
+                    right[0].as_ref(),
+                )?)])
             }
         }
     }
 
-    fn query_path_primary(&self, primary: &PathPrimary) -> Result<T, Error> {
+    fn eval_path_primary(&self, primary: &PathPrimary) -> Result<Cow<'a, T>> {
         match primary {
-            PathPrimary::Root => Ok(self.root.clone()),
-            PathPrimary::Current => Ok(self.current.clone()),
-            PathPrimary::Value(v) => self.query_value(v),
+            PathPrimary::Root => Ok(Cow::Borrowed(self.root.clone())),
+            PathPrimary::Current => Ok(Cow::Borrowed(self.current.clone())),
+            PathPrimary::Value(v) => self.eval_value(v),
         }
     }
 
-    fn query_accessor_op(&self, op: &AccessorOp) -> Result<Vec<T>, Error> {
+    fn eval_accessor_op(&self, op: &AccessorOp) -> Result<Vec<Cow<'a, T>>> {
         match op {
             AccessorOp::MemberWildcard => Ok(self
                 .current
                 .as_object()
+                // FIXME: should return empty set in lax mode
                 .ok_or_else(|| Error::MemberAccess)?
-                .list_value()),
+                .list_value()
+                .into_iter()
+                .map(Cow::Borrowed)
+                .collect()),
             AccessorOp::ElementWildcard => Ok(self
                 .current
                 .as_array()
+                // FIXME: should return empty set in lax mode
                 .ok_or_else(|| Error::ArrayAccess)?
-                .list()),
+                .list()
+                .into_iter()
+                .map(Cow::Borrowed)
+                .collect()),
             AccessorOp::Member(name) => self
                 .current
                 .as_object()
+                // FIXME: should return empty set in lax mode
                 .ok_or_else(|| Error::MemberAccess)?
                 .get(name)
-                .ok_or_else(|| Error::NoKey(name.to_string()))
-                .map(|v| vec![v]),
+                .ok_or_else(|| Error::NoKey(name.clone().into()))
+                .map(|v| vec![Cow::Borrowed(v)]),
             AccessorOp::Element(indices) => {
+                // FIXME: should return empty set in lax mode
                 let array = self.current.as_array().ok_or_else(|| Error::ArrayAccess)?;
                 let mut elems = Vec::with_capacity(indices.len());
                 for index in indices {
@@ -311,7 +337,7 @@ impl<T: JsonRef> Query<T> {
                                 .to_usize(array.len())
                                 .ok_or_else(|| Error::ArrayIndexOutOfBounds)?;
                             let elem = array.get(i).unwrap();
-                            elems.push(elem);
+                            elems.push(Cow::Borrowed(elem));
                         }
                         ArrayIndex::Slice((begin, end)) => {
                             let begin = begin
@@ -323,19 +349,25 @@ impl<T: JsonRef> Query<T> {
                             if begin > end {
                                 return Err(Error::ArrayIndexOutOfBounds);
                             }
-                            elems
-                                .extend(array.list().into_iter().skip(begin).take(end + 1 - begin));
+                            elems.extend(
+                                array
+                                    .list()
+                                    .into_iter()
+                                    .skip(begin)
+                                    .take(end + 1 - begin)
+                                    .map(Cow::Borrowed),
+                            );
                         }
                     }
                 }
                 Ok(elems)
             }
             AccessorOp::FilterExpr(_) => todo!(),
-            AccessorOp::Method(method) => self.query_method(method).map(|v| vec![v]),
+            AccessorOp::Method(method) => self.eval_method(method).map(|v| vec![v]),
         }
     }
 
-    fn query_method(&self, method: &Method) -> Result<T, Error> {
+    fn eval_method(&self, method: &Method) -> Result<Cow<'a, T>> {
         match method {
             Method::Type => {
                 let s = if self.current.is_null() {
@@ -353,7 +385,7 @@ impl<T: JsonRef> Query<T> {
                 } else {
                     unreachable!()
                 };
-                Ok(<T::Owned>::from_string(s))
+                Ok(Cow::Owned(T::from_string(s)))
             }
             Method::Size => {
                 let size = if let Some(array) = self.current.as_array() {
@@ -363,14 +395,14 @@ impl<T: JsonRef> Query<T> {
                     // The size of an SQL/JSON object or a scalar is 1.
                     1
                 };
-                Ok(<T::Owned>::from_u64(size as u64))
+                Ok(Cow::Owned(T::from_u64(size as u64)))
             }
             Method::Double => {
                 if let Some(s) = self.current.as_str() {
                     let n = s.parse::<f64>().map_err(|_| Error::InvalidDouble)?;
-                    Ok(<T::Owned>::from_f64(n))
+                    Ok(Cow::Owned(T::from_f64(n)))
                 } else if self.current.is_number() {
-                    Ok(self.current.clone())
+                    Ok(Cow::Borrowed(self.current.clone()))
                 } else {
                     Err(Error::DoubleTypeError)
                 }
@@ -382,41 +414,77 @@ impl<T: JsonRef> Query<T> {
         }
     }
 
-    fn query_value(&self, value: &Value) -> Result<T, Error> {
-        Ok(T::from_value(value.clone()))
+    fn eval_value(&self, value: &Value) -> Result<Cow<'a, T>> {
+        Ok(match value {
+            Value::Null => Cow::Owned(T::null()),
+            Value::Boolean(b) => Cow::Owned(T::bool(*b)),
+            Value::Number(n) => Cow::Owned(T::from_number(n.clone())),
+            Value::String(s) => Cow::Owned(T::from_string(s)),
+            Value::Variable(v) => Cow::Borrowed(self.get_variable(v)?),
+        })
     }
+}
 
-    /// Compare two values.
-    ///
-    /// Return unknown if the values are not comparable.
-    fn compare(&self, op: CompareOp, left: T, right: T) -> Truth {
-        use CompareOp::*;
-        if left.is_null() && right.is_null() {
-            return compare_ord(op, (), ()).into();
-        }
-        if left.is_null() || right.is_null() {
-            return false.into();
-        }
-        if let (Some(left), Some(right)) = (left.as_bool(), right.as_bool()) {
-            return compare_ord(op, left, right).into();
-        }
-        if let (Some(left), Some(right)) = (left.as_number(), right.as_number()) {
-            return match op {
-                Eq => number_equal_to(&left, &right),
-                Ne => !number_equal_to(&left, &right),
-                Gt => number_less_than(&right, &left),
-                Ge => !number_less_than(&left, &right),
-                Lt => number_less_than(&left, &right),
-                Le => !number_less_than(&right, &left),
-            }
-            .into();
-        }
-        if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
-            return compare_ord(op, left, right).into();
-        }
-        // others (include arrays and objects) are not comparable
-        Truth::Unknown
+/// Compare two values.
+///
+/// Return unknown if the values are not comparable.
+fn eval_compare<T: Json>(op: CompareOp, left: T::Borrowed<'_>, right: T::Borrowed<'_>) -> Truth {
+    use CompareOp::*;
+    if left.is_null() && right.is_null() {
+        return compare_ord(op, (), ()).into();
     }
+    if left.is_null() || right.is_null() {
+        return false.into();
+    }
+    if let (Some(left), Some(right)) = (left.as_bool(), right.as_bool()) {
+        return compare_ord(op, left, right).into();
+    }
+    if let (Some(left), Some(right)) = (left.as_number(), right.as_number()) {
+        return match op {
+            Eq => left.equal(&right),
+            Ne => !left.equal(&right),
+            Gt => right.less_than(&left),
+            Ge => !left.less_than(&right),
+            Lt => left.less_than(&right),
+            Le => !right.less_than(&left),
+        }
+        .into();
+    }
+    if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
+        return compare_ord(op, left, right).into();
+    }
+    // others (include arrays and objects) are not comparable
+    Truth::Unknown
+}
+
+fn eval_unary_op<T: Json>(op: UnaryOp, value: T::Borrowed<'_>) -> Result<T> {
+    let n = value
+        .as_number()
+        .ok_or_else(|| Error::UnaryOperandNotNumeric(op))?;
+    Ok(match op {
+        UnaryOp::Plus => value.to_owned(),
+        UnaryOp::Minus => T::from_number(n.neg()),
+    })
+}
+
+fn eval_binary_op<T: Json>(
+    op: BinaryOp,
+    left: T::Borrowed<'_>,
+    right: T::Borrowed<'_>,
+) -> Result<T> {
+    let left = left
+        .as_number()
+        .ok_or_else(|| Error::LeftOperandNotNumeric(op))?;
+    let right = right
+        .as_number()
+        .ok_or_else(|| Error::RightOperandNotNumeric(op))?;
+    Ok(T::from_number(match op {
+        BinaryOp::Add => left.add(&right),
+        BinaryOp::Sub => left.sub(&right),
+        BinaryOp::Mul => left.mul(&right),
+        BinaryOp::Div => left.div(&right),
+        BinaryOp::Rem => left.rem(&right),
+    }))
 }
 
 fn compare_ord<T: Ord>(op: CompareOp, left: T, right: T) -> bool {
@@ -431,26 +499,83 @@ fn compare_ord<T: Ord>(op: CompareOp, left: T, right: T) -> bool {
     }
 }
 
-fn number_equal_to(left: &Number, right: &Number) -> bool {
-    if let (Some(l), Some(r)) = (left.as_f64(), right.as_f64()) {
-        l == r
-    } else if let (Some(l), Some(r)) = (left.as_i64(), right.as_i64()) {
-        l == r
-    } else if let (Some(l), Some(r)) = (left.as_u64(), right.as_u64()) {
-        l == r
-    } else {
-        false
-    }
+trait NumberExt {
+    fn equal(&self, other: &Self) -> bool;
+    fn less_than(&self, other: &Self) -> bool;
+    fn neg(&self) -> Self;
+    fn add(&self, other: &Self) -> Self;
+    fn sub(&self, other: &Self) -> Self;
+    fn mul(&self, other: &Self) -> Self;
+    fn div(&self, other: &Self) -> Self;
+    fn rem(&self, other: &Self) -> Self;
 }
 
-fn number_less_than(n1: &Number, n2: &Number) -> bool {
-    if let (Some(a), Some(b)) = (n1.as_f64(), n2.as_f64()) {
-        a < b
-    } else if let (Some(a), Some(b)) = (n1.as_i64(), n2.as_i64()) {
-        a < b
-    } else if let (Some(a), Some(b)) = (n1.as_u64(), n2.as_u64()) {
-        a < b
-    } else {
-        false
+impl NumberExt for Number {
+    fn equal(&self, other: &Self) -> bool {
+        self.as_f64().unwrap() == other.as_f64().unwrap()
+    }
+
+    fn less_than(&self, other: &Self) -> bool {
+        self.as_f64().unwrap() < other.as_f64().unwrap()
+    }
+
+    fn neg(&self) -> Self {
+        if let Some(n) = self.as_i64() {
+            Number::from(-n)
+        } else if let Some(n) = self.as_f64() {
+            Number::from_f64(-n).unwrap()
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn add(&self, other: &Self) -> Self {
+        if let (Some(a), Some(b)) = (self.as_i64(), other.as_i64()) {
+            Number::from(a + b)
+        } else if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
+            Number::from_f64(a + b).unwrap()
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn sub(&self, other: &Self) -> Self {
+        if let (Some(a), Some(b)) = (self.as_i64(), other.as_i64()) {
+            Number::from(a - b)
+        } else if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
+            Number::from_f64(a - b).unwrap()
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn mul(&self, other: &Self) -> Self {
+        if let (Some(a), Some(b)) = (self.as_i64(), other.as_i64()) {
+            Number::from(a * b)
+        } else if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
+            Number::from_f64(a * b).unwrap()
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn div(&self, other: &Self) -> Self {
+        if let (Some(a), Some(b)) = (self.as_i64(), other.as_i64()) {
+            Number::from(a / b)
+        } else if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
+            Number::from_f64(a / b).unwrap()
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn rem(&self, other: &Self) -> Self {
+        if let (Some(a), Some(b)) = (self.as_i64(), other.as_i64()) {
+            Number::from(a % b)
+        } else if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
+            Number::from_f64(a % b).unwrap()
+        } else {
+            unreachable!()
+        }
     }
 }

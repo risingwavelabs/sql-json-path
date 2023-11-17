@@ -239,7 +239,7 @@ fn arith_op(input: &str) -> IResult<&str, BinaryOp> {
         value(BinaryOp::Sub, char('-')),
         value(BinaryOp::Mul, char('*')),
         value(BinaryOp::Div, char('/')),
-        value(BinaryOp::Mod, char('%')),
+        value(BinaryOp::Rem, char('%')),
     ))(input)
 }
 

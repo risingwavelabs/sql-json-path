@@ -1,62 +1,80 @@
 use serde_json::Number;
 
-use crate::node::Value;
+pub enum Cow<'a, T: Json> {
+    Borrowed(T::Borrowed<'a>),
+    Owned(T),
+}
 
-pub trait Json {
-    type Borrowed<'a>: JsonRef
+impl<'a, T: Json> Cow<'a, T> {
+    pub fn as_ref<'b>(&'b self) -> T::Borrowed<'b>
     where
-        Self: 'a;
+        'a: 'b,
+    {
+        match self {
+            // SAFETY: 'a: 'b => T::Borrowed<'a>: T::Borrowed<'b>
+            Cow::Borrowed(v) => unsafe { std::mem::transmute(*v) },
+            Cow::Owned(v) => v.as_ref(),
+        }
+    }
+}
+
+pub trait Json: Clone + 'static {
+    type Borrowed<'a>: JsonRef<'a, Owned = Self>;
+
     fn as_ref(&self) -> Self::Borrowed<'_>;
-    fn from_value(v: Value) -> Self;
+    fn null() -> Self;
+    fn bool(b: bool) -> Self;
     fn from_u64(v: u64) -> Self;
     fn from_f64(v: f64) -> Self;
+    fn from_number(n: Number) -> Self;
     fn from_string(s: &str) -> Self;
 }
 
-pub trait JsonRef: Clone {
-    type Owned: Json;
-    type Array: ArrayRef<Json = Self>;
-    type Object: ObjectRef<Json = Self>;
+pub trait JsonRef<'a>: Copy {
+    type Owned: Json<Borrowed<'a> = Self>;
+    type Array: ArrayRef<'a, Json = Self>;
+    type Object: ObjectRef<'a, Json = Self>;
 
+    fn to_owned(self) -> Self::Owned;
     fn null() -> Self;
-    fn bool(b: bool) -> Self;
-    fn is_null(&self) -> bool;
-    fn as_bool(&self) -> Option<bool>;
-    fn as_number(&self) -> Option<Number>;
-    fn as_str(&self) -> Option<&str>;
-    fn as_array(&self) -> Option<Self::Array>;
-    fn as_object(&self) -> Option<Self::Object>;
+    fn is_null(self) -> bool;
+    fn as_bool(self) -> Option<bool>;
+    fn as_number(self) -> Option<Number>;
+    fn as_str(self) -> Option<&'a str>;
+    fn as_array(self) -> Option<Self::Array>;
+    fn as_object(self) -> Option<Self::Object>;
 
-    fn is_bool(&self) -> bool {
+    fn is_bool(self) -> bool {
         self.as_bool().is_some()
     }
-    fn is_number(&self) -> bool {
+    fn is_number(self) -> bool {
         self.as_number().is_some()
     }
-    fn is_str(&self) -> bool {
+    fn is_str(self) -> bool {
         self.as_str().is_some()
     }
-    fn is_array(&self) -> bool {
+    fn is_array(self) -> bool {
         self.as_array().is_some()
     }
-    fn is_object(&self) -> bool {
+    fn is_object(self) -> bool {
         self.as_object().is_some()
     }
 }
 
-pub trait ArrayRef: Clone {
-    type Json: JsonRef;
+pub trait ArrayRef<'a>: Copy {
+    type Json: JsonRef<'a>;
 
-    fn len(&self) -> usize;
-    fn get(&self, index: usize) -> Option<Self::Json>;
-    fn list(&self) -> Vec<Self::Json>;
+    fn len(self) -> usize;
+    fn get(self, index: usize) -> Option<Self::Json>;
+    fn list(self) -> Vec<Self::Json>;
 }
-pub trait ObjectRef: Clone {
-    type Json: JsonRef;
 
-    fn len(&self) -> usize;
-    fn get(&self, key: &str) -> Option<Self::Json>;
-    fn list_value(&self) -> Vec<Self::Json>;
+pub trait ObjectRef<'a>: Copy {
+    type Json: JsonRef<'a>;
+
+    fn len(self) -> usize;
+    fn get(self, key: &str) -> Option<Self::Json>;
+    fn list_value(self) -> Vec<Self::Json>;
 }
 
 impl Json for serde_json::Value {
@@ -66,14 +84,12 @@ impl Json for serde_json::Value {
         self
     }
 
-    fn from_value(v: Value) -> Self {
-        match v {
-            Value::Null => Self::Null,
-            Value::Boolean(b) => Self::Bool(b),
-            Value::Number(n) => Self::Number(n),
-            Value::String(s) => Self::String(s),
-            Value::Variable(_) => todo!(),
-        }
+    fn null() -> Self {
+        serde_json::Value::Null
+    }
+
+    fn bool(b: bool) -> Self {
+        serde_json::Value::Bool(b)
     }
 
     fn from_u64(v: u64) -> Self {
@@ -84,77 +100,81 @@ impl Json for serde_json::Value {
         Self::Number(Number::from_f64(v).unwrap())
     }
 
+    fn from_number(n: Number) -> Self {
+        Self::Number(n)
+    }
+
     fn from_string(s: &str) -> Self {
         Self::String(s.to_owned())
     }
 }
 
-impl<'a> JsonRef for &'a serde_json::Value {
+impl<'a> JsonRef<'a> for &'a serde_json::Value {
     type Owned = serde_json::Value;
     type Array = &'a Vec<serde_json::Value>;
     type Object = &'a serde_json::Map<String, serde_json::Value>;
+
+    fn to_owned(self) -> Self::Owned {
+        self.clone()
+    }
 
     fn null() -> Self {
         &serde_json::Value::Null
     }
 
-    fn bool(b: bool) -> Self {
-        &serde_json::Value::Bool(b)
+    fn is_null(self) -> bool {
+        self.is_null()
     }
 
-    fn is_null(&self) -> bool {
-        (*self).is_null()
+    fn as_bool(self) -> Option<bool> {
+        self.as_bool()
     }
 
-    fn as_bool(&self) -> Option<bool> {
-        (*self).as_bool()
+    fn as_number(self) -> Option<Number> {
+        self.as_number().cloned()
     }
 
-    fn as_number(&self) -> Option<Number> {
-        (*self).as_number().cloned()
+    fn as_str(self) -> Option<&'a str> {
+        self.as_str()
     }
 
-    fn as_str(&self) -> Option<&str> {
-        (*self).as_str()
+    fn as_array(self) -> Option<Self::Array> {
+        self.as_array()
     }
 
-    fn as_array(&self) -> Option<Self::Array> {
-        (*self).as_array()
-    }
-
-    fn as_object(&self) -> Option<Self::Object> {
-        (*self).as_object()
+    fn as_object(self) -> Option<Self::Object> {
+        self.as_object()
     }
 }
 
-impl<'a> ArrayRef for &'a Vec<serde_json::Value> {
+impl<'a> ArrayRef<'a> for &'a Vec<serde_json::Value> {
     type Json = &'a serde_json::Value;
 
-    fn len(&self) -> usize {
-        (*self).len()
+    fn len(self) -> usize {
+        self.len()
     }
 
-    fn get(&self, index: usize) -> Option<Self::Json> {
-        (*self).get(index)
+    fn get(self, index: usize) -> Option<Self::Json> {
+        (**self).get(index)
     }
 
-    fn list(&self) -> Vec<Self::Json> {
-        (*self).iter().collect()
+    fn list(self) -> Vec<Self::Json> {
+        self.iter().collect()
     }
 }
 
-impl<'a> ObjectRef for &'a serde_json::Map<String, serde_json::Value> {
+impl<'a> ObjectRef<'a> for &'a serde_json::Map<String, serde_json::Value> {
     type Json = &'a serde_json::Value;
 
-    fn len(&self) -> usize {
-        (*self).len()
+    fn len(self) -> usize {
+        self.len()
     }
 
-    fn get(&self, key: &str) -> Option<Self::Json> {
-        (*self).get(key)
+    fn get(self, key: &str) -> Option<Self::Json> {
+        self.get(key)
     }
 
-    fn list_value(&self) -> Vec<Self::Json> {
-        (*self).values().collect()
+    fn list_value(self) -> Vec<Self::Json> {
+        self.values().collect()
     }
 }

@@ -14,10 +14,9 @@ pub struct JsonPath {
 }
 
 /// The mode of JSON Path.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     /// Lax mode converts errors to empty SQL/JSON sequences.
-    #[default]
     Lax,
     /// Strict mode raises an error if the data does not strictly adhere to the requirements of a path expression.
     Strict,
@@ -150,7 +149,7 @@ impl Index {
 }
 
 /// Represents the index in an Array.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrayIndex {
     /// The single number index.
     Index(Index),
@@ -174,7 +173,7 @@ pub enum Value {
 }
 
 /// A binary operator.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareOp {
     /// `==` represents left is equal to right.
     Eq,
@@ -191,7 +190,7 @@ pub enum CompareOp {
 }
 
 /// A unary operator.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     /// `+` represents plus.
     Plus,
@@ -200,7 +199,7 @@ pub enum UnaryOp {
 }
 
 /// A binary operator.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     /// `+` represents left plus right.
     Add,
@@ -210,8 +209,8 @@ pub enum BinaryOp {
     Mul,
     /// `/` represents left divide right.
     Div,
-    /// `%` represents left mod right.
-    Mod,
+    /// `%` represents left modulo right.
+    Rem,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -368,7 +367,7 @@ impl Display for BinaryOp {
             Self::Sub => write!(f, "-"),
             Self::Mul => write!(f, "*"),
             Self::Div => write!(f, "/"),
-            Self::Mod => write!(f, "%"),
+            Self::Rem => write!(f, "%"),
         }
     }
 }
