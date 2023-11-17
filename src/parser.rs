@@ -69,8 +69,8 @@ fn json_path(input: &str) -> IResult<&str, JsonPath> {
                 mode,
                 s,
                 alt((
-                    map(expr, ExprOrPredicate::Expr),
                     map(predicate, ExprOrPredicate::Pred),
+                    map(expr, ExprOrPredicate::Expr),
                 )),
             ),
             s,
@@ -88,6 +88,26 @@ fn mode(input: &str) -> IResult<&str, Mode> {
 }
 
 fn predicate(input: &str) -> IResult<&str, Predicate> {
+    let (input, first) = predicate1(input)?;
+    let mut first0 = Some(first);
+    fold_many0(
+        preceded(delimited(s, tag("||"), s), predicate1),
+        move || first0.take().unwrap(),
+        |acc, pred| Predicate::Or(Box::new(acc), Box::new(pred)),
+    )(input)
+}
+
+fn predicate1(input: &str) -> IResult<&str, Predicate> {
+    let (input, first) = predicate2(input)?;
+    let mut first0 = Some(first);
+    fold_many0(
+        preceded(delimited(s, tag("&&"), s), predicate2),
+        move || first0.take().unwrap(),
+        |acc, pred| Predicate::And(Box::new(acc), Box::new(pred)),
+    )(input)
+}
+
+fn predicate2(input: &str) -> IResult<&str, Predicate> {
     alt((
         delimited_predicate,
         map(
@@ -113,14 +133,6 @@ fn predicate(input: &str) -> IResult<&str, Predicate> {
         map(preceded(pair(tag("!"), s), delimited_predicate), |p| {
             Predicate::Not(Box::new(p))
         }),
-        map(
-            separated_pair(predicate, delimited(s, tag("&&"), s), predicate),
-            |(left, right)| Predicate::And(Box::new(left), Box::new(right)),
-        ),
-        map(
-            separated_pair(predicate, delimited(s, tag("||"), s), predicate),
-            |(left, right)| Predicate::Or(Box::new(left), Box::new(right)),
-        ),
     ))(input)
 }
 
@@ -139,6 +151,38 @@ fn delimited_predicate(input: &str) -> IResult<&str, Predicate> {
 }
 
 fn expr(input: &str) -> IResult<&str, Expr> {
+    let (input, first) = expr1(input)?;
+    let mut first0 = Some(first);
+    fold_many0(
+        pair(delimited(s, alt((char('+'), char('-'))), s), expr1),
+        move || first0.take().unwrap(),
+        |acc, (op, expr)| match op {
+            '+' => Expr::BinaryOp(BinaryOp::Add, Box::new(acc), Box::new(expr)),
+            '-' => Expr::BinaryOp(BinaryOp::Sub, Box::new(acc), Box::new(expr)),
+            _ => unreachable!(),
+        },
+    )(input)
+}
+
+fn expr1(input: &str) -> IResult<&str, Expr> {
+    let (input, first) = expr2(input)?;
+    let mut first0 = Some(first);
+    fold_many0(
+        pair(
+            delimited(s, alt((char('*'), char('/'), char('%'))), s),
+            expr2,
+        ),
+        move || first0.take().unwrap(),
+        |acc, (op, expr)| match op {
+            '*' => Expr::BinaryOp(BinaryOp::Mul, Box::new(acc), Box::new(expr)),
+            '/' => Expr::BinaryOp(BinaryOp::Div, Box::new(acc), Box::new(expr)),
+            '%' => Expr::BinaryOp(BinaryOp::Rem, Box::new(acc), Box::new(expr)),
+            _ => unreachable!(),
+        },
+    )(input)
+}
+
+fn expr2(input: &str) -> IResult<&str, Expr> {
     alt((
         accessor_expr,
         delimited(pair(char('('), s), expr, pair(s, char(')'))),
@@ -148,10 +192,6 @@ fn expr(input: &str) -> IResult<&str, Expr> {
         map(preceded(pair(char('-'), s), expr), |expr| {
             Expr::UnaryOp(UnaryOp::Minus, Box::new(expr))
         }),
-        map(
-            tuple((expr, delimited(s, arith_op, s), expr)),
-            |(left, op, right)| Expr::BinaryOp(op, Box::new(left), Box::new(right)),
-        ),
     ))(input)
 }
 
@@ -175,10 +215,10 @@ fn accessor_op(input: &str) -> IResult<&str, AccessorOp> {
     alt((
         value(AccessorOp::MemberWildcard, tag(".*")),
         value(AccessorOp::ElementWildcard, element_wildcard),
+        map(item_method, AccessorOp::Method),
         map(member_accessor, AccessorOp::Member),
         map(array_accessor, AccessorOp::Element),
         map(filter_expr, |expr| AccessorOp::FilterExpr(Box::new(expr))),
-        map(item_method, AccessorOp::Method),
     ))(input)
 }
 
@@ -225,16 +265,6 @@ fn cmp_op(input: &str) -> IResult<&str, CompareOp> {
         value(CompareOp::Lt, char('<')),
         value(CompareOp::Ge, tag(">=")),
         value(CompareOp::Gt, char('>')),
-    ))(input)
-}
-
-fn arith_op(input: &str) -> IResult<&str, BinaryOp> {
-    alt((
-        value(BinaryOp::Add, char('+')),
-        value(BinaryOp::Sub, char('-')),
-        value(BinaryOp::Mul, char('*')),
-        value(BinaryOp::Div, char('/')),
-        value(BinaryOp::Rem, char('%')),
     ))(input)
 }
 
