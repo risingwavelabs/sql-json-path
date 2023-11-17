@@ -7,7 +7,7 @@ use crate::{
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("jsonpath array accessor can only be applied to an array")]
     ArrayAccess,
@@ -51,15 +51,15 @@ impl From<bool> for Truth {
 }
 
 impl Truth {
-    pub fn is_true(self) -> bool {
+    fn is_true(self) -> bool {
         matches!(self, Truth::True)
     }
 
-    pub fn is_false(self) -> bool {
+    fn is_false(self) -> bool {
         matches!(self, Truth::False)
     }
 
-    pub fn is_unknown(self) -> bool {
+    fn is_unknown(self) -> bool {
         matches!(self, Truth::Unknown)
     }
 
@@ -116,14 +116,16 @@ struct Evaluator<'a, T: Json> {
     mode: Mode,
 }
 
-impl<'a, T: Json> Evaluator<'a, T> {
-    fn lax<O: Default>(&self, result: Result<O>) -> Result<O> {
-        match self.mode {
-            Mode::Lax => Ok(O::default()),
-            _ => result,
+macro_rules! lax {
+    ($self:expr, $expr:expr) => {
+        match $expr {
+            None if $self.is_lax() => return Ok(vec![]),
+            e => e,
         }
-    }
+    };
+}
 
+impl<'a, T: Json> Evaluator<'a, T> {
     fn is_lax(&self) -> bool {
         matches!(self.mode, Mode::Lax)
     }
@@ -300,35 +302,26 @@ impl<'a, T: Json> Evaluator<'a, T> {
 
     fn eval_accessor_op(&self, op: &AccessorOp) -> Result<Vec<Cow<'a, T>>> {
         match op {
-            AccessorOp::MemberWildcard => Ok(self
-                .current
-                .as_object()
-                // FIXME: should return empty set in lax mode
-                .ok_or_else(|| Error::MemberAccess)?
-                .list_value()
-                .into_iter()
-                .map(Cow::Borrowed)
-                .collect()),
-            AccessorOp::ElementWildcard => Ok(self
-                .current
-                .as_array()
-                // FIXME: should return empty set in lax mode
-                .ok_or_else(|| Error::ArrayAccess)?
-                .list()
-                .into_iter()
-                .map(Cow::Borrowed)
-                .collect()),
-            AccessorOp::Member(name) => self
-                .current
-                .as_object()
-                // FIXME: should return empty set in lax mode
-                .ok_or_else(|| Error::MemberAccess)?
-                .get(name)
-                .ok_or_else(|| Error::NoKey(name.clone().into()))
-                .map(|v| vec![Cow::Borrowed(v)]),
+            AccessorOp::MemberWildcard => {
+                let object =
+                    lax!(self, self.current.as_object()).ok_or_else(|| Error::MemberAccess)?;
+                Ok(object.list_value().into_iter().map(Cow::Borrowed).collect())
+            }
+            AccessorOp::ElementWildcard => {
+                let array =
+                    lax!(self, self.current.as_array()).ok_or_else(|| Error::ArrayAccess)?;
+                Ok(array.list().into_iter().map(Cow::Borrowed).collect())
+            }
+            AccessorOp::Member(name) => {
+                let object =
+                    lax!(self, self.current.as_object()).ok_or_else(|| Error::MemberAccess)?;
+                let member = lax!(self, object.get(name))
+                    .ok_or_else(|| Error::NoKey(name.clone().into()))?;
+                Ok(vec![Cow::Borrowed(member)])
+            }
             AccessorOp::Element(indices) => {
-                // FIXME: should return empty set in lax mode
-                let array = self.current.as_array().ok_or_else(|| Error::ArrayAccess)?;
+                let array =
+                    lax!(self, self.current.as_array()).ok_or_else(|| Error::ArrayAccess)?;
                 let mut elems = Vec::with_capacity(indices.len());
                 for index in indices {
                     match index {

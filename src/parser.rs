@@ -15,11 +15,24 @@ use nom::{
 use serde_json::Number;
 use std::str::FromStr;
 
+impl JsonPath {
+    /// Compiles a JSON Path expression.
+    pub fn new(s: &str) -> Result<Self, Error> {
+        Self::from_str(s)
+    }
+}
+
 impl FromStr for JsonPath {
     type Err = Error;
 
     /// Parse a JSON Path from string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.trim().is_empty() {
+            return Err(Error {
+                position: 0,
+                message: "empty jsonpath".into(),
+            });
+        }
         let (rest, json_path) = json_path(s)
             .finish()
             .map_err(|e| Error::from_input_error(s, e))?;

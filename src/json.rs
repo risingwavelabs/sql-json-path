@@ -1,5 +1,7 @@
 use serde_json::Number;
+use std::fmt::{Debug, Display};
 
+#[derive(Debug)]
 pub enum Cow<'a, T: Json> {
     Borrowed(T::Borrowed<'a>),
     Owned(T),
@@ -18,7 +20,16 @@ impl<'a, T: Json> Cow<'a, T> {
     }
 }
 
-pub trait Json: Clone + 'static {
+impl<T: Json> Display for Cow<'_, T>
+where
+    for<'a> T::Borrowed<'a>: Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.as_ref(), f)
+    }
+}
+
+pub trait Json: Clone + Debug + 'static {
     type Borrowed<'a>: JsonRef<'a, Owned = Self>;
 
     fn as_ref(&self) -> Self::Borrowed<'_>;
@@ -30,7 +41,7 @@ pub trait Json: Clone + 'static {
     fn from_string(s: &str) -> Self;
 }
 
-pub trait JsonRef<'a>: Copy {
+pub trait JsonRef<'a>: Copy + Debug {
     type Owned: Json<Borrowed<'a> = Self>;
     type Array: ArrayRef<'a, Json = Self>;
     type Object: ObjectRef<'a, Json = Self>;

@@ -226,7 +226,10 @@ pub enum Method {
 
 impl Display for JsonPath {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.mode, self.expr)
+        if self.mode == Mode::Strict {
+            write!(f, "strict ")?;
+        }
+        write!(f, "{}", self.expr)
     }
 }
 
@@ -268,7 +271,7 @@ impl Display for Expr {
             Expr::Accessor(primary, ops) => {
                 write!(f, "{primary}")?;
                 for op in ops {
-                    write!(f, " {op}")?;
+                    write!(f, "{op}")?;
                 }
                 Ok(())
             }
@@ -318,8 +321,17 @@ impl Display for AccessorOp {
         match self {
             Self::MemberWildcard => write!(f, ".*"),
             Self::ElementWildcard => write!(f, "[*]"),
-            Self::Member(field) => write!(f, ".{field}"),
-            Self::Element(indices) => f.debug_list().entries(indices).finish(),
+            Self::Member(field) => write!(f, ".\"{field}\""),
+            Self::Element(indices) => {
+                write!(f, "[")?;
+                for (i, idx) in indices.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "{idx}")?;
+                }
+                write!(f, "]")
+            }
             Self::FilterExpr(expr) => write!(f, "?({expr})"),
             Self::Method(method) => write!(f, ".{method}()"),
         }
