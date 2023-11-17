@@ -92,11 +92,7 @@ fn predicate(input: &str) -> IResult<&str, Predicate> {
         delimited_predicate,
         map(
             tuple((expr, delimited(s, cmp_op, s), expr)),
-            |(left, op, right)| Predicate::Compare {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-            },
+            |(left, op, right)| Predicate::Compare(op, Box::new(left), Box::new(right)),
         ),
         map(
             delimited(
@@ -147,14 +143,14 @@ fn expr(input: &str) -> IResult<&str, Expr> {
         accessor_expr,
         delimited(pair(char('('), s), expr, pair(s, char(')'))),
         map(preceded(pair(char('+'), s), expr), |expr| {
-            Expr::unary(UnaryOp::Plus, expr)
+            Expr::UnaryOp(UnaryOp::Plus, Box::new(expr))
         }),
         map(preceded(pair(char('-'), s), expr), |expr| {
-            Expr::unary(UnaryOp::Minus, expr)
+            Expr::UnaryOp(UnaryOp::Minus, Box::new(expr))
         }),
         map(
             tuple((expr, delimited(s, arith_op, s), expr)),
-            |(left, op, right)| Expr::binary(op, left, right),
+            |(left, op, right)| Expr::BinaryOp(op, Box::new(left), Box::new(right)),
         ),
     ))(input)
 }

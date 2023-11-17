@@ -170,7 +170,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
 
     fn eval_predicate(&self, pred: &Predicate) -> Result<Truth> {
         match pred {
-            Predicate::Compare { op, left, right } => {
+            Predicate::Compare(op, left, right) => {
                 let Ok(left) = self.eval_expr(left) else {
                     return Ok(Truth::Unknown);
                 };
@@ -278,7 +278,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 }
                 Ok(set)
             }
-            Expr::UnaryOp { op, expr } => {
+            Expr::UnaryOp(op, expr) => {
                 let set = self.eval_expr(expr)?;
                 let mut new_set = Vec::with_capacity(set.len());
                 for v in set {
@@ -286,7 +286,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 }
                 Ok(new_set)
             }
-            Expr::BinaryOp { op, left, right } => {
+            Expr::BinaryOp(op, left, right) => {
                 let left = self.eval_expr(left)?;
                 let right = self.eval_expr(right)?;
                 if left.len() != 1 {

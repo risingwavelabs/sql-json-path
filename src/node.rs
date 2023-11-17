@@ -34,41 +34,16 @@ pub enum Expr {
     /// Accessor expression.
     Accessor(PathPrimary, Vec<AccessorOp>),
     /// Unary operation.
-    UnaryOp { op: UnaryOp, expr: Box<Expr> },
+    UnaryOp(UnaryOp, Box<Expr>),
     /// Binary operation.
-    BinaryOp {
-        op: BinaryOp,
-        left: Box<Expr>,
-        right: Box<Expr>,
-    },
-}
-
-impl Expr {
-    pub(crate) fn unary(op: UnaryOp, expr: Self) -> Self {
-        Self::UnaryOp {
-            op,
-            expr: Box::new(expr),
-        }
-    }
-
-    pub(crate) fn binary(op: BinaryOp, left: Self, right: Self) -> Self {
-        Self::BinaryOp {
-            op,
-            left: Box::new(left),
-            right: Box::new(right),
-        }
-    }
+    BinaryOp(BinaryOp, Box<Expr>, Box<Expr>),
 }
 
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Predicate {
     /// Compare operation
-    Compare {
-        op: CompareOp,
-        left: Box<Expr>,
-        right: Box<Expr>,
-    },
+    Compare(CompareOp, Box<Expr>, Box<Expr>),
     Exists(Box<Expr>),
     And(Box<Predicate>, Box<Predicate>),
     Or(Box<Predicate>, Box<Predicate>),
@@ -213,7 +188,7 @@ impl Display for ExprOrPredicate {
 impl Display for Predicate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Compare { op, left, right } => write!(f, "({left} {op} {right})"),
+            Self::Compare(op, left, right) => write!(f, "({left} {op} {right})"),
             Self::Exists(expr) => write!(f, "exists({expr})"),
             Self::And(left, right) => write!(f, "({left} && {right})"),
             Self::Or(left, right) => write!(f, "({left} || {right})"),
@@ -234,8 +209,8 @@ impl Display for Expr {
                 }
                 Ok(())
             }
-            Expr::UnaryOp { op, expr } => write!(f, "{op} {expr}"),
-            Expr::BinaryOp { op, left, right } => write!(f, "({left} {op} {right})"),
+            Expr::UnaryOp(op, expr) => write!(f, "{op} {expr}"),
+            Expr::BinaryOp(op, left, right) => write!(f, "({left} {op} {right})"),
         }
     }
 }
