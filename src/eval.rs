@@ -344,7 +344,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 let array = self.array.as_array().ok_or_else(|| Error::UnexpectedLast)?;
                 Ok(vec![Cow::Owned(T::from_i64(array.len() as i64 - 1))])
             }
-            PathPrimary::Expr(expr) => self.eval_expr(expr),
+            PathPrimary::ExprOrPred(expr) => self.eval_expr_or_predicate(expr),
         }
     }
 

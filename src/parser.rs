@@ -69,20 +69,16 @@ impl Error {
 
 fn json_path(input: &str) -> IResult<&str, JsonPath> {
     map(
-        delimited(
-            s,
-            separated_pair(
-                mode,
-                s,
-                alt((
-                    map(predicate, ExprOrPredicate::Pred),
-                    map(expr, ExprOrPredicate::Expr),
-                )),
-            ),
-            s,
-        ),
+        delimited(s, separated_pair(mode, s, expr_or_predicate), s),
         |(mode, expr)| JsonPath { mode, expr },
     )(input)
+}
+
+fn expr_or_predicate(input: &str) -> IResult<&str, ExprOrPredicate> {
+    alt((
+        map(predicate, ExprOrPredicate::Pred),
+        map(expr, ExprOrPredicate::Expr),
+    ))(input)
 }
 
 fn mode(input: &str) -> IResult<&str, Mode> {
@@ -222,8 +218,8 @@ fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
         value(PathPrimary::Current, char('@')),
         value(PathPrimary::Last, tag("last")),
         map(
-            delimited(pair(char('('), s), expr, pair(s, char(')'))),
-            |expr| PathPrimary::Expr(Box::new(expr)),
+            delimited(pair(char('('), s), expr_or_predicate, pair(s, char(')'))),
+            |expr| PathPrimary::ExprOrPred(Box::new(expr)),
         ),
     ))(input)
 }
