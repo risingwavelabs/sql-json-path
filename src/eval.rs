@@ -142,11 +142,14 @@ impl<'a, T: Json> Evaluator<'a, T> {
         matches!(self.mode, Mode::Lax)
     }
 
-    fn with_current(&self, current: T::Borrowed<'a>) -> Self {
-        Self {
-            current: current,
-            root: self.root,
-            vars: self.vars,
+    fn with_current<'b>(&self, current: T::Borrowed<'b>) -> Evaluator<'b, T>
+    where
+        'a: 'b,
+    {
+        Evaluator {
+            current,
+            root: T::borrow(self.root),
+            vars: T::borrow(self.vars),
             mode: self.mode,
         }
     }
@@ -268,10 +271,20 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 let mut new_set = vec![];
                 for op in ops {
                     for v in &set {
-                        let Cow::Borrowed(v) = v else {
-                            panic!("access on owned value is not supported");
-                        };
-                        new_set.extend(self.with_current(*v).eval_accessor_op(op)?);
+                        match v {
+                            Cow::Owned(v) => {
+                                let sset = self.with_current(v.as_ref()).eval_accessor_op(op)?;
+                                new_set.extend(
+                                    // the returned set requires lifetime 'a,
+                                    // however, elements in `sset` only have lifetime 'b < 'v = 'set < 'a
+                                    // therefore, we need to convert them to owned values
+                                    sset.into_iter().map(|cow| Cow::Owned(cow.into_owned())),
+                                )
+                            }
+                            Cow::Borrowed(v) => {
+                                new_set.extend(self.with_current(*v).eval_accessor_op(op)?);
+                            }
+                        }
                     }
                     std::mem::swap(&mut set, &mut new_set);
                     new_set.clear();

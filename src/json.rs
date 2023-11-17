@@ -13,9 +13,15 @@ impl<'a, T: Json> Cow<'a, T> {
         'a: 'b,
     {
         match self {
-            // SAFETY: 'a: 'b => T::Borrowed<'a>: T::Borrowed<'b>
-            Cow::Borrowed(v) => unsafe { std::mem::transmute(*v) },
+            Cow::Borrowed(v) => T::borrow(*v),
             Cow::Owned(v) => v.as_ref(),
+        }
+    }
+
+    pub fn into_owned(self) -> T {
+        match self {
+            Cow::Borrowed(v) => v.to_owned(),
+            Cow::Owned(v) => v,
         }
     }
 }
@@ -40,6 +46,12 @@ pub trait Json: Clone + Debug + 'static {
     fn from_f64(v: f64) -> Self;
     fn from_number(n: Number) -> Self;
     fn from_string(s: &str) -> Self;
+
+    /// Narrow down the lifetime of a borrowed value.
+    fn borrow<'b, 'a: 'b>(p: Self::Borrowed<'a>) -> Self::Borrowed<'b> {
+        // SAFETY: 'a: 'b => T::Borrowed<'a>: T::Borrowed<'b>
+        unsafe { std::mem::transmute(p) }
+    }
 }
 
 pub trait JsonRef<'a>: Copy + Debug {

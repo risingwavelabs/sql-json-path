@@ -319,6 +319,14 @@ fn query() {
         jsonb_path_query("[1,2,3]", "$[last - 1]"),
         Ok(vec!["2".into()])
     );
+    assert_eq!(
+        jsonb_path_query("[1,2,3]", r#"$[last ? (@.type() == "number")]"#),
+        Ok(vec!["3".into()])
+    );
+    assert_eq!(
+        jsonb_path_query("[1,2,3]", r#"$[last ? (@.type() == "string")]"#),
+        Err(EvalError::ArraySubscriptNotNumeric)
+    );
 }
 
 fn jsonb_path_exists(json: &str, path: &str) -> Result<bool, EvalError> {
