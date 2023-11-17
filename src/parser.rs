@@ -42,7 +42,12 @@ impl FromStr for JsonPath {
                 message: format!("unexpected trailing characters: {rest}").into(),
             });
         }
-        LastChecker.visit_json_path(&json_path)?;
+        Checker::default()
+            .visit_json_path(&json_path)
+            .map_err(|msg| Error {
+                position: 0,
+                message: msg.into(),
+            })?;
         Ok(json_path)
     }
 }
@@ -380,22 +385,26 @@ fn raw_string(input: &str) -> IResult<&str, String> {
     )(input)
 }
 
-/// Check if there is any `last` outside of element accessor.
-struct LastChecker;
+/// A visitor that checks if a JSON Path is valid.
+#[derive(Debug, Clone, Copy, Default)]
+struct Checker {
+    non_root: bool,
+    inside_element_accessor: bool,
+}
 
-impl LastChecker {
-    fn visit_json_path(&self, json_path: &JsonPath) -> Result<(), Error> {
+impl Checker {
+    fn visit_json_path(&self, json_path: &JsonPath) -> Result<(), &'static str> {
         self.visit_expr_or_predicate(&json_path.expr)
     }
 
-    fn visit_expr_or_predicate(&self, expr_or_pred: &ExprOrPredicate) -> Result<(), Error> {
+    fn visit_expr_or_predicate(&self, expr_or_pred: &ExprOrPredicate) -> Result<(), &'static str> {
         match expr_or_pred {
             ExprOrPredicate::Expr(expr) => self.visit_expr(expr),
             ExprOrPredicate::Pred(pred) => self.visit_predicate(pred),
         }
     }
 
-    fn visit_expr(&self, expr: &Expr) -> Result<(), Error> {
+    fn visit_expr(&self, expr: &Expr) -> Result<(), &'static str> {
         match expr {
             Expr::Accessor(primary, accessors) => {
                 for accessor in accessors {
@@ -411,7 +420,7 @@ impl LastChecker {
         }
     }
 
-    fn visit_predicate(&self, pred: &Predicate) -> Result<(), Error> {
+    fn visit_predicate(&self, pred: &Predicate) -> Result<(), &'static str> {
         match pred {
             Predicate::Compare(_, left, right) => {
                 self.visit_expr(left)?;
@@ -428,21 +437,41 @@ impl LastChecker {
         }
     }
 
-    fn visit_path_primary(&self, primary: &PathPrimary) -> Result<(), Error> {
+    fn visit_path_primary(&self, primary: &PathPrimary) -> Result<(), &'static str> {
         match primary {
-            PathPrimary::Last => Err(Error {
-                position: 0,
-                message: "LAST is allowed only in array subscripts".into(),
-            }),
+            PathPrimary::Last if !self.inside_element_accessor => {
+                Err("LAST is allowed only in array subscripts")
+            }
+            PathPrimary::Current if !self.non_root => Err("@ is not allowed in root expressions"),
             _ => Ok(()),
         }
     }
 
-    fn visit_accessor_op(&self, accessor_op: &AccessorOp) -> Result<(), Error> {
+    fn visit_accessor_op(&self, accessor_op: &AccessorOp) -> Result<(), &'static str> {
         match accessor_op {
-            AccessorOp::ElementWildcard | AccessorOp::Element(_) => Ok(()),
-            AccessorOp::FilterExpr(pred) => self.visit_predicate(pred),
-            AccessorOp::Member(_) | AccessorOp::MemberWildcard | AccessorOp::Method(_) => Ok(()),
+            AccessorOp::ElementWildcard | AccessorOp::MemberWildcard => Ok(()),
+            AccessorOp::Member(_) | AccessorOp::Method(_) => Ok(()),
+            AccessorOp::FilterExpr(pred) => Self {
+                non_root: true,
+                ..*self
+            }
+            .visit_predicate(pred),
+            AccessorOp::Element(indices) => {
+                let next = Self {
+                    non_root: true,
+                    inside_element_accessor: true,
+                };
+                for index in indices {
+                    match index {
+                        ArrayIndex::Index(i) => next.visit_expr(i)?,
+                        ArrayIndex::Slice(s, e) => {
+                            next.visit_expr(s)?;
+                            next.visit_expr(e)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
