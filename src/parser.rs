@@ -42,6 +42,7 @@ impl FromStr for JsonPath {
                 message: format!("unexpected trailing characters: {rest}").into(),
             });
         }
+        LastChecker.visit_json_path(&json_path)?;
         Ok(json_path)
     }
 }
@@ -377,6 +378,73 @@ fn raw_string(input: &str) -> IResult<&str, String> {
         take_while1(|c: char| c.is_ascii_alphanumeric() || c == '_' || c >= '\u{0080}'),
         String::from,
     )(input)
+}
+
+/// Check if there is any `last` outside of element accessor.
+struct LastChecker;
+
+impl LastChecker {
+    fn visit_json_path(&self, json_path: &JsonPath) -> Result<(), Error> {
+        self.visit_expr_or_predicate(&json_path.expr)
+    }
+
+    fn visit_expr_or_predicate(&self, expr_or_pred: &ExprOrPredicate) -> Result<(), Error> {
+        match expr_or_pred {
+            ExprOrPredicate::Expr(expr) => self.visit_expr(expr),
+            ExprOrPredicate::Pred(pred) => self.visit_predicate(pred),
+        }
+    }
+
+    fn visit_expr(&self, expr: &Expr) -> Result<(), Error> {
+        match expr {
+            Expr::Accessor(primary, accessors) => {
+                for accessor in accessors {
+                    self.visit_accessor_op(accessor)?;
+                }
+                self.visit_path_primary(primary)
+            }
+            Expr::UnaryOp(_, expr) => self.visit_expr(expr),
+            Expr::BinaryOp(_, left, right) => {
+                self.visit_expr(left)?;
+                self.visit_expr(right)
+            }
+        }
+    }
+
+    fn visit_predicate(&self, pred: &Predicate) -> Result<(), Error> {
+        match pred {
+            Predicate::Compare(_, left, right) => {
+                self.visit_expr(left)?;
+                self.visit_expr(right)
+            }
+            Predicate::Exists(expr) => self.visit_expr(expr),
+            Predicate::And(left, right) | Predicate::Or(left, right) => {
+                self.visit_predicate(left)?;
+                self.visit_predicate(right)
+            }
+            Predicate::Not(pred) => self.visit_predicate(pred),
+            Predicate::IsUnknown(pred) => self.visit_predicate(pred),
+            Predicate::StartsWith(expr, _) => self.visit_expr(expr),
+        }
+    }
+
+    fn visit_path_primary(&self, primary: &PathPrimary) -> Result<(), Error> {
+        match primary {
+            PathPrimary::Last => Err(Error {
+                position: 0,
+                message: "LAST is allowed only in array subscripts".into(),
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    fn visit_accessor_op(&self, accessor_op: &AccessorOp) -> Result<(), Error> {
+        match accessor_op {
+            AccessorOp::ElementWildcard | AccessorOp::Element(_) => Ok(()),
+            AccessorOp::FilterExpr(pred) => self.visit_predicate(pred),
+            AccessorOp::Member(_) | AccessorOp::MemberWildcard | AccessorOp::Method(_) => Ok(()),
+        }
+    }
 }
 
 #[cfg(test)]
