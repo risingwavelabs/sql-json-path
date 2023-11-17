@@ -60,7 +60,7 @@ pub enum PathPrimary {
     Current,
     /// Literal value.
     Value(Value),
-    /// `last` represents the last element in an Array.
+    /// `last` is the size of the array minus 1.
     Last,
 }
 

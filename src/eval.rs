@@ -102,21 +102,37 @@ impl Truth {
 
 impl JsonPath {
     pub fn query<'a, T: Json>(&self, value: T::Borrowed<'a>) -> Result<Vec<Cow<'a, T>>> {
+        self.query_with_vars(value, T::Borrowed::null())
+    }
+
+    pub fn query_with_vars<'a, T: Json>(
+        &self,
+        value: T::Borrowed<'a>,
+        vars: T::Borrowed<'a>,
+    ) -> Result<Vec<Cow<'a, T>>> {
         Evaluator {
             root: value,
             current: value,
-            vars: T::Borrowed::null(),
+            vars,
+            array: T::Borrowed::null(),
             mode: self.mode,
         }
         .eval_expr_or_predicate(&self.expr)
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 struct Evaluator<'a, T: Json> {
+    /// The current value referenced by `@`.
     current: T::Borrowed<'a>,
+    /// The root value referenced by `$`.
     root: T::Borrowed<'a>,
+    /// The innermost array value referenced by `last`.
+    array: T::Borrowed<'a>,
+    /// An object containing the variables referenced by `$var`.
     vars: T::Borrowed<'a>,
-    // If the query is in lax mode, then errors are ignored and the result is empty or unknown.
+    /// The path mode.
+    /// If the query is in lax mode, then errors are ignored and the result is empty or unknown.
     mode: Mode,
 }
 
@@ -150,6 +166,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
             current,
             root: T::borrow(self.root),
             vars: T::borrow(self.vars),
+            array: T::borrow(self.array),
             mode: self.mode,
         }
     }
@@ -323,10 +340,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
             PathPrimary::Current => Ok(Cow::Borrowed(self.current.clone())),
             PathPrimary::Value(v) => self.eval_value(v),
             PathPrimary::Last => {
-                let array = self
-                    .current
-                    .as_array()
-                    .ok_or_else(|| Error::UnexpectedLast)?;
+                let array = self.array.as_array().ok_or_else(|| Error::UnexpectedLast)?;
                 Ok(Cow::Owned(T::from_i64(array.len() as i64 - 1)))
             }
         }
@@ -347,48 +361,63 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 let member = lax!(self, object.get(name), Error::NoKey(name.clone().into()));
                 Ok(vec![Cow::Borrowed(member)])
             }
-            AccessorOp::Element(indices) => {
-                let array = lax!(self, self.current.as_array(), Error::ArrayAccess);
-                let mut elems = Vec::with_capacity(indices.len());
-                for index in indices {
-                    let eval_index = |expr: &Expr| {
-                        let set = self.eval_expr(expr)?;
-                        if set.len() != 1 {
-                            return Err(Error::ArraySubscriptNotNumeric);
-                        }
-                        let index = set[0]
-                            .as_ref()
-                            .as_number()
-                            .ok_or_else(|| Error::ArraySubscriptNotNumeric)?
-                            .as_u64()
-                            .ok_or_else(|| Error::ArrayIndexOutOfBounds)?;
-                        Ok(index as usize)
-                    };
-                    match index {
-                        ArrayIndex::Index(expr) => {
-                            let index = lax!(self, eval_index(expr));
-                            let elem = lax!(self, array.get(index), Error::ArrayIndexOutOfBounds);
-                            elems.push(Cow::Borrowed(elem));
-                        }
-                        ArrayIndex::Slice(begin, end) => {
-                            let begin = lax!(self, eval_index(begin));
-                            let end = lax!(self, eval_index(end));
-                            lax!(
-                                self,
-                                (begin <= end && end < array.len()).then_some(()),
-                                Error::ArrayIndexOutOfBounds
-                            );
-                            elems.extend(
-                                (begin..=end).map(|i| Cow::Borrowed(array.get(i).unwrap())),
-                            );
-                        }
-                    }
+            AccessorOp::Element(indices) => self.eval_element_accessor(indices),
+            AccessorOp::FilterExpr(pred) => {
+                if self.eval_predicate(pred)?.is_true() {
+                    Ok(vec![Cow::Borrowed(self.current.clone())])
+                } else {
+                    Ok(vec![])
                 }
-                Ok(elems)
             }
-            AccessorOp::FilterExpr(_) => todo!(),
             AccessorOp::Method(method) => self.eval_method(method).map(|v| vec![v]),
         }
+    }
+
+    fn eval_element_accessor(&self, indices: &[ArrayIndex]) -> Result<Vec<Cow<'a, T>>> {
+        let array = lax!(self, self.current.as_array(), Error::ArrayAccess);
+        let mut elems = Vec::with_capacity(indices.len());
+        for index in indices {
+            let eval_index = |expr: &Expr| {
+                // errors in this closure can not be ignored
+                let set = Self {
+                    // update `array` context
+                    array: self.current,
+                    ..*self
+                }
+                .eval_expr(expr)?;
+                if set.len() != 1 {
+                    return Err(Error::ArraySubscriptNotNumeric);
+                }
+                set[0]
+                    .as_ref()
+                    .as_number()
+                    .ok_or_else(|| Error::ArraySubscriptNotNumeric)
+            };
+            match index {
+                ArrayIndex::Index(expr) => {
+                    let index_number = eval_index(expr)?;
+                    let index =
+                        lax!(self, index_number.as_u64(), Error::ArrayIndexOutOfBounds) as usize;
+                    let elem = lax!(self, array.get(index), Error::ArrayIndexOutOfBounds);
+                    elems.push(Cow::Borrowed(elem));
+                }
+                ArrayIndex::Slice(begin, end) => {
+                    let begin_number = eval_index(begin)?;
+                    let end_number = eval_index(end)?;
+                    let begin =
+                        lax!(self, begin_number.as_u64(), Error::ArrayIndexOutOfBounds) as usize;
+                    let end =
+                        lax!(self, end_number.as_u64(), Error::ArrayIndexOutOfBounds) as usize;
+                    lax!(
+                        self,
+                        (begin <= end && end < array.len()).then_some(()),
+                        Error::ArrayIndexOutOfBounds
+                    );
+                    elems.extend((begin..=end).map(|i| Cow::Borrowed(array.get(i).unwrap())));
+                }
+            }
+        }
+        Ok(elems)
     }
 
     fn eval_method(&self, method: &Method) -> Result<Cow<'a, T>> {

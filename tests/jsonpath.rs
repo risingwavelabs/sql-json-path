@@ -303,12 +303,15 @@ fn query() {
         Ok(true)
     );
     assert!(jsonb_path_exists(r#"[{"a": 1}, {"a": 2}, 3]"#, "strict $[*].a").is_err());
+}
 
+#[test]
+fn query_last() {
     assert_eq!(jsonb_path_query("[]", "$[last]"), Ok(vec![]));
-    // assert_eq!(
-    //     jsonb_path_query("[]", "$[last ? (exists(last))]"),
-    //     Ok(vec![])
-    // );
+    assert_eq!(
+        jsonb_path_query("[]", "$[last ? (exists(last))]"),
+        Ok(vec![])
+    );
     assert_eq!(
         jsonb_path_query("[]", "strict $[last]"),
         Err(EvalError::ArrayIndexOutOfBounds)
