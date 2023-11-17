@@ -115,7 +115,6 @@ fn predicate1(input: &str) -> IResult<&str, Predicate> {
 
 fn predicate2(input: &str) -> IResult<&str, Predicate> {
     alt((
-        delimited_predicate,
         map(
             tuple((expr, delimited(s, cmp_op, s), expr)),
             |(left, op, right)| Predicate::Compare(op, Box::new(left), Box::new(right)),
@@ -139,6 +138,7 @@ fn predicate2(input: &str) -> IResult<&str, Predicate> {
         map(preceded(pair(tag("!"), s), delimited_predicate), |p| {
             Predicate::Not(Box::new(p))
         }),
+        delimited_predicate,
     ))(input)
 }
 
@@ -210,10 +210,14 @@ fn accessor_expr(input: &str) -> IResult<&str, Expr> {
 
 fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
     alt((
+        map(scalar_value, PathPrimary::Value),
         value(PathPrimary::Root, char('$')),
         value(PathPrimary::Current, char('@')),
-        map(scalar_value, PathPrimary::Value),
         value(PathPrimary::Last, tag("last")),
+        map(
+            delimited(pair(char('('), s), expr, pair(s, char(')'))),
+            |expr| PathPrimary::Expr(Box::new(expr)),
+        ),
     ))(input)
 }
 

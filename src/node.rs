@@ -62,6 +62,8 @@ pub enum PathPrimary {
     Value(Value),
     /// `last` is the size of the array minus 1.
     Last,
+    /// `(expr)` represents an expression.
+    Expr(Box<Expr>),
 }
 
 /// Represents a valid JSON Path.
@@ -231,6 +233,7 @@ impl Display for PathPrimary {
             Self::Current => write!(f, "@"),
             Self::Value(v) => write!(f, "{v}"),
             Self::Last => write!(f, "last"),
+            Self::Expr(expr) => write!(f, "({expr})"),
         }
     }
 }

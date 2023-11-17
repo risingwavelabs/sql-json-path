@@ -284,7 +284,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
     fn eval_expr(&self, expr: &Expr) -> Result<Vec<Cow<'a, T>>> {
         match expr {
             Expr::Accessor(primary, ops) => {
-                let mut set = vec![self.eval_path_primary(primary)?];
+                let mut set = self.eval_path_primary(primary)?;
                 let mut new_set = vec![];
                 for op in ops {
                     for v in &set {
@@ -334,15 +334,16 @@ impl<'a, T: Json> Evaluator<'a, T> {
         }
     }
 
-    fn eval_path_primary(&self, primary: &PathPrimary) -> Result<Cow<'a, T>> {
+    fn eval_path_primary(&self, primary: &PathPrimary) -> Result<Vec<Cow<'a, T>>> {
         match primary {
-            PathPrimary::Root => Ok(Cow::Borrowed(self.root.clone())),
-            PathPrimary::Current => Ok(Cow::Borrowed(self.current.clone())),
-            PathPrimary::Value(v) => self.eval_value(v),
+            PathPrimary::Root => Ok(vec![Cow::Borrowed(self.root.clone())]),
+            PathPrimary::Current => Ok(vec![Cow::Borrowed(self.current.clone())]),
+            PathPrimary::Value(v) => Ok(vec![self.eval_value(v)?]),
             PathPrimary::Last => {
                 let array = self.array.as_array().ok_or_else(|| Error::UnexpectedLast)?;
-                Ok(Cow::Owned(T::from_i64(array.len() as i64 - 1)))
+                Ok(vec![Cow::Owned(T::from_i64(array.len() as i64 - 1))])
             }
+            PathPrimary::Expr(expr) => self.eval_expr(expr),
         }
     }
 
