@@ -4,7 +4,7 @@ use crate::node::*;
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_while, take_while1},
-    character::complete::{char, i32, i64, multispace0 as s, u64},
+    character::complete::{char, i64, multispace0 as s, u64},
     combinator::{cut, map, value, verify},
     error::context,
     multi::{fold_many0, many0, separated_list1},
@@ -171,6 +171,7 @@ fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
         value(PathPrimary::Root, char('$')),
         value(PathPrimary::Current, char('@')),
         map(scalar_value, PathPrimary::Value),
+        value(PathPrimary::Last, tag("last")),
     ))(input)
 }
 
@@ -193,21 +194,6 @@ fn member_accessor(input: &str) -> IResult<&str, String> {
     preceded(pair(char('.'), s), alt((string, raw_string)))(input)
 }
 
-fn index(input: &str) -> IResult<&str, Index> {
-    alt((
-        map(i32, Index::Index),
-        map(
-            preceded(tuple((tag_no_case("last"), s, char('-'), s)), i32),
-            |v| Index::LastIndex(v.saturating_neg()),
-        ),
-        map(
-            preceded(tuple((tag_no_case("last"), s, char('+'), s)), i32),
-            Index::LastIndex,
-        ),
-        map(tag_no_case("last"), |_| Index::LastIndex(0)),
-    ))(input)
-}
-
 fn array_accessor(input: &str) -> IResult<&str, Vec<ArrayIndex>> {
     delimited(
         char('['),
@@ -218,11 +204,11 @@ fn array_accessor(input: &str) -> IResult<&str, Vec<ArrayIndex>> {
 
 fn index_elem(input: &str) -> IResult<&str, ArrayIndex> {
     alt((
-        map(index, ArrayIndex::Index),
         map(
-            separated_pair(index, delimited(s, tag_no_case("to"), s), index),
-            |(s, e)| ArrayIndex::Slice((s, e)),
+            separated_pair(expr, delimited(s, tag_no_case("to"), s), expr),
+            |(start, end)| ArrayIndex::Slice(start, end),
         ),
+        map(expr, ArrayIndex::Index),
     ))(input)
 }
 

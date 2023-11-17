@@ -19,6 +19,42 @@ fn parse() {
     }
 
     test_err("");
+    test_err(r#"last"#);
+    test_err(r#"$ ? (last > 0)"#);
+    test_err(r#"1.type()"#);
+    test_err(r#"$ ? (@ like_regex "(invalid pattern")"#);
+    test_err(r#"$ ? (@ like_regex "pattern" flag "xsms")"#);
+    test_err(r#"$ ? (@ like_regex "pattern" flag "a")"#);
+    test_err(r#"@ + 1"#);
+    test_err(r#"00"#);
+    test_err(r#"0755"#);
+    test_err(r#"1a"#);
+    test_err(r#"1e"#);
+    test_err(r#"1.e"#);
+    test_err(r#"1.2a"#);
+    test_err(r#"1.2e"#);
+    test_err(r#"1.2e3a"#);
+    test_err(r#"0b"#);
+    test_err(r#"1b"#);
+    test_err(r#"0b0x"#);
+    test_err(r#"0o"#);
+    test_err(r#"1o"#);
+    test_err(r#"0o0x"#);
+    test_err(r#"0x"#);
+    test_err(r#"1x"#);
+    test_err(r#"0x0y"#);
+    test_err(r#"_100"#);
+    test_err(r#"100_"#);
+    test_err(r#"100__000"#);
+    test_err(r#"_1_000.5"#);
+    test_err(r#"1_000_.5"#);
+    test_err(r#"1_000._5"#);
+    test_err(r#"1_000.5_"#);
+    test_err(r#"1_000.5e_1"#);
+    test_err(r#"0b_10_0101"#);
+    test_err(r#"0o_273"#);
+    test_err(r#"0x_42F"#);
+
     test1("$", "$");
     test1("strict $", "strict $");
     test1("lax $", "$");
@@ -267,6 +303,22 @@ fn query() {
         Ok(true)
     );
     assert!(jsonb_path_exists(r#"[{"a": 1}, {"a": 2}, 3]"#, "strict $[*].a").is_err());
+
+    assert_eq!(jsonb_path_query("[]", "$[last]"), Ok(vec![]));
+    // assert_eq!(
+    //     jsonb_path_query("[]", "$[last ? (exists(last))]"),
+    //     Ok(vec![])
+    // );
+    assert_eq!(
+        jsonb_path_query("[]", "strict $[last]"),
+        Err(EvalError::ArrayIndexOutOfBounds)
+    );
+    assert_eq!(jsonb_path_query("[1]", "$[last]"), Ok(vec!["1".into()]));
+    assert_eq!(jsonb_path_query("[1,2,3]", "$[last]"), Ok(vec!["3".into()]));
+    assert_eq!(
+        jsonb_path_query("[1,2,3]", "$[last - 1]"),
+        Ok(vec!["2".into()])
+    );
 }
 
 fn jsonb_path_exists(json: &str, path: &str) -> Result<bool, EvalError> {
@@ -274,4 +326,11 @@ fn jsonb_path_exists(json: &str, path: &str) -> Result<bool, EvalError> {
     let path = JsonPath::from_str(path).unwrap();
     let list = path.query::<serde_json::Value>(&json)?;
     Ok(!list.is_empty())
+}
+
+fn jsonb_path_query(json: &str, path: &str) -> Result<Vec<String>, EvalError> {
+    let json = serde_json::Value::from_str(json).unwrap();
+    let path = JsonPath::from_str(path).unwrap();
+    let list = path.query::<serde_json::Value>(&json)?;
+    Ok(list.into_iter().map(|v| v.to_string()).collect())
 }

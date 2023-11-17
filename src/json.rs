@@ -36,6 +36,7 @@ pub trait Json: Clone + Debug + 'static {
     fn null() -> Self;
     fn bool(b: bool) -> Self;
     fn from_u64(v: u64) -> Self;
+    fn from_i64(v: i64) -> Self;
     fn from_f64(v: f64) -> Self;
     fn from_number(n: Number) -> Self;
     fn from_string(s: &str) -> Self;
@@ -104,6 +105,10 @@ impl Json for serde_json::Value {
     }
 
     fn from_u64(v: u64) -> Self {
+        Self::Number(Number::from(v))
+    }
+
+    fn from_i64(v: i64) -> Self {
         Self::Number(Number::from(v))
     }
 

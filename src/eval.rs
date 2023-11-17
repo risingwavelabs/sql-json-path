@@ -23,6 +23,8 @@ pub enum Error {
     LeftOperandNotNumeric(BinaryOp),
     #[error("right operand of jsonpath operator {0} is not a single numeric value")]
     RightOperandNotNumeric(BinaryOp),
+    #[error("jsonpath array subscript is not a single numeric value")]
+    ArraySubscriptNotNumeric,
     #[error("could not find jsonpath variable \"{0}\"")]
     NoVariable(Box<str>),
     #[error("\"vars\" argument is not an object")]
@@ -31,6 +33,8 @@ pub enum Error {
     DoubleTypeError,
     #[error("string argument of jsonpath item method .double() is not a valid representation of a double precision number")]
     InvalidDouble,
+    #[error("LAST is allowed only in array subscripts")]
+    UnexpectedLast,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,10 +121,18 @@ struct Evaluator<'a, T: Json> {
 }
 
 macro_rules! lax {
+    ($self:expr, $expr:expr, $err:expr) => {
+        match $expr {
+            Some(x) => x,
+            None if $self.is_lax() => return Ok(vec![]),
+            None => return Err($err),
+        }
+    };
     ($self:expr, $expr:expr) => {
         match $expr {
-            None if $self.is_lax() => return Ok(vec![]),
-            e => e,
+            Ok(x) => x,
+            Err(_) if $self.is_lax() => return Ok(vec![]),
+            Err(e) => return Err(e),
         }
     };
 }
@@ -297,58 +309,64 @@ impl<'a, T: Json> Evaluator<'a, T> {
             PathPrimary::Root => Ok(Cow::Borrowed(self.root.clone())),
             PathPrimary::Current => Ok(Cow::Borrowed(self.current.clone())),
             PathPrimary::Value(v) => self.eval_value(v),
+            PathPrimary::Last => {
+                let array = self
+                    .current
+                    .as_array()
+                    .ok_or_else(|| Error::UnexpectedLast)?;
+                Ok(Cow::Owned(T::from_i64(array.len() as i64 - 1)))
+            }
         }
     }
 
     fn eval_accessor_op(&self, op: &AccessorOp) -> Result<Vec<Cow<'a, T>>> {
         match op {
             AccessorOp::MemberWildcard => {
-                let object =
-                    lax!(self, self.current.as_object()).ok_or_else(|| Error::MemberAccess)?;
+                let object = lax!(self, self.current.as_object(), Error::MemberAccess);
                 Ok(object.list_value().into_iter().map(Cow::Borrowed).collect())
             }
             AccessorOp::ElementWildcard => {
-                let array =
-                    lax!(self, self.current.as_array()).ok_or_else(|| Error::ArrayAccess)?;
+                let array = lax!(self, self.current.as_array(), Error::ArrayAccess);
                 Ok(array.list().into_iter().map(Cow::Borrowed).collect())
             }
             AccessorOp::Member(name) => {
-                let object =
-                    lax!(self, self.current.as_object()).ok_or_else(|| Error::MemberAccess)?;
-                let member = lax!(self, object.get(name))
-                    .ok_or_else(|| Error::NoKey(name.clone().into()))?;
+                let object = lax!(self, self.current.as_object(), Error::MemberAccess);
+                let member = lax!(self, object.get(name), Error::NoKey(name.clone().into()));
                 Ok(vec![Cow::Borrowed(member)])
             }
             AccessorOp::Element(indices) => {
-                let array =
-                    lax!(self, self.current.as_array()).ok_or_else(|| Error::ArrayAccess)?;
+                let array = lax!(self, self.current.as_array(), Error::ArrayAccess);
                 let mut elems = Vec::with_capacity(indices.len());
                 for index in indices {
+                    let eval_index = |expr: &Expr| {
+                        let set = self.eval_expr(expr)?;
+                        if set.len() != 1 {
+                            return Err(Error::ArraySubscriptNotNumeric);
+                        }
+                        let index = set[0]
+                            .as_ref()
+                            .as_number()
+                            .ok_or_else(|| Error::ArraySubscriptNotNumeric)?
+                            .as_u64()
+                            .ok_or_else(|| Error::ArrayIndexOutOfBounds)?;
+                        Ok(index as usize)
+                    };
                     match index {
-                        ArrayIndex::Index(i) => {
-                            let i = i
-                                .to_usize(array.len())
-                                .ok_or_else(|| Error::ArrayIndexOutOfBounds)?;
-                            let elem = array.get(i).unwrap();
+                        ArrayIndex::Index(expr) => {
+                            let index = lax!(self, eval_index(expr));
+                            let elem = lax!(self, array.get(index), Error::ArrayIndexOutOfBounds);
                             elems.push(Cow::Borrowed(elem));
                         }
-                        ArrayIndex::Slice((begin, end)) => {
-                            let begin = begin
-                                .to_usize(array.len())
-                                .ok_or_else(|| Error::ArrayIndexOutOfBounds)?;
-                            let end = end
-                                .to_usize(array.len())
-                                .ok_or_else(|| Error::ArrayIndexOutOfBounds)?;
-                            if begin > end {
-                                return Err(Error::ArrayIndexOutOfBounds);
-                            }
+                        ArrayIndex::Slice(begin, end) => {
+                            let begin = lax!(self, eval_index(begin));
+                            let end = lax!(self, eval_index(end));
+                            lax!(
+                                self,
+                                (begin <= end && end < array.len()).then_some(()),
+                                Error::ArrayIndexOutOfBounds
+                            );
                             elems.extend(
-                                array
-                                    .list()
-                                    .into_iter()
-                                    .skip(begin)
-                                    .take(end + 1 - begin)
-                                    .map(Cow::Borrowed),
+                                (begin..=end).map(|i| Cow::Borrowed(array.get(i).unwrap())),
                             );
                         }
                     }

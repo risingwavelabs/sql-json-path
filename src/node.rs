@@ -1,6 +1,5 @@
 //! The AST of JSON Path.
 
-use std::cmp::Ordering;
 use std::fmt::Display;
 use std::fmt::Formatter;
 
@@ -86,6 +85,8 @@ pub enum PathPrimary {
     Current,
     /// Literal value.
     Value(Value),
+    /// `last` represents the last element in an Array.
+    Last,
 }
 
 /// Represents a valid JSON Path.
@@ -99,17 +100,6 @@ pub enum AccessorOp {
     /// The name can also be written as a string literal, allowing the name to contain special characters, like `$." $price"`.
     Member(String),
     /// `[<index1>,<index2>,..]` represents selecting elements specified by the indices in an Array.
-    /// There are several forms of index.
-    /// 1. A single number representing the 0-based `n-th` element in the Array.
-    ///    e.g. `[0]` represents the first element in an Array.
-    /// 2. The keyword `last` represents the last element in the Array,
-    ///    and last minus a number represents the n-th element before the last element,
-    ///    e.g. `[last-1]` represents the penultimate element.
-    /// 3. The keyword `to` between two numbers represent all elements of a range in an Array,
-    ///    e.g. `[1 to last]` represents all the elements in the Array from the second to the last.
-    ///
-    /// There can be more than one index, e.g. `$[0, last-1 to last, 5]` represents the first,
-    /// the last two, and the sixth element in an Array.
     Element(Vec<ArrayIndex>),
     /// `?(<expression>)` represents selecting all elements in an object or array that match the filter expression, like `$.book[?(@.price < 10)]`.
     FilterExpr(Box<Predicate>),
@@ -117,44 +107,13 @@ pub enum AccessorOp {
     Method(Method),
 }
 
-/// Represents the single index in an Array.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Index {
-    /// The 0-based index in an Array.
-    Index(i32),
-    /// The last n-th index in an Array.
-    LastIndex(i32),
-}
-
-impl Index {
-    /// Converts the index to usize. Returns None if the index is out of range.
-    pub(crate) fn to_usize(self, len: usize) -> Option<usize> {
-        match self {
-            Self::Index(idx) => {
-                if idx >= 0 && idx < len as i32 {
-                    Some(idx as usize)
-                } else {
-                    None
-                }
-            }
-            Self::LastIndex(idx) => {
-                if idx >= 0 && idx < len as i32 {
-                    Some(len - idx as usize)
-                } else {
-                    None
-                }
-            }
-        }
-    }
-}
-
 /// Represents the index in an Array.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArrayIndex {
     /// The single number index.
-    Index(Index),
+    Index(Expr),
     /// The range index between two number.
-    Slice((Index, Index)),
+    Slice(Expr, Expr),
 }
 
 /// Represents a scalar value.
@@ -285,23 +244,7 @@ impl Display for ArrayIndex {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Index(idx) => write!(f, "{idx}"),
-            Self::Slice((start, end)) => write!(f, "{start} to {end}"),
-        }
-    }
-}
-
-impl Display for Index {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Index::Index(idx) => write!(f, "{idx}"),
-            Index::LastIndex(idx) => {
-                write!(f, "last")?;
-                match idx.cmp(&0) {
-                    Ordering::Greater => write!(f, "+{idx}"),
-                    Ordering::Less => write!(f, "{idx}"),
-                    Ordering::Equal => Ok(()),
-                }
-            }
+            Self::Slice(start, end) => write!(f, "{start} to {end}"),
         }
     }
 }
@@ -312,6 +255,7 @@ impl Display for PathPrimary {
             Self::Root => write!(f, "$"),
             Self::Current => write!(f, "@"),
             Self::Value(v) => write!(f, "{v}"),
+            Self::Last => write!(f, "last"),
         }
     }
 }
