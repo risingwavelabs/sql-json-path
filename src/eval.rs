@@ -278,6 +278,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 }
                 Ok(result)
             }
+            Predicate::LikeRegex(expr, pattern, flag) => todo!(),
         }
     }
 

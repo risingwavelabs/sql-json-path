@@ -5,7 +5,7 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_while, take_while1},
     character::complete::{char, i64, multispace0 as s, u64},
-    combinator::{cut, map, value, verify},
+    combinator::{cut, map, opt, value, verify},
     error::context,
     multi::{fold_many0, many0, separated_list1},
     number::complete::double,
@@ -134,6 +134,13 @@ fn predicate2(input: &str) -> IResult<&str, Predicate> {
                 starts_with_literal,
             ),
             |(expr, literal)| Predicate::StartsWith(Box::new(expr), literal),
+        ),
+        map(
+            pair(
+                separated_pair(expr, tuple((s, tag("like_regex"), s)), string),
+                opt(preceded(tuple((s, tag("flag"), s)), string)),
+            ),
+            |((expr, pattern), flags)| Predicate::LikeRegex(Box::new(expr), pattern, flags),
         ),
         map(preceded(pair(tag("!"), s), delimited_predicate), |p| {
             Predicate::Not(Box::new(p))
@@ -438,6 +445,7 @@ impl Checker {
             Predicate::Not(pred) => self.visit_predicate(pred),
             Predicate::IsUnknown(pred) => self.visit_predicate(pred),
             Predicate::StartsWith(expr, _) => self.visit_expr(expr),
+            Predicate::LikeRegex(expr, _, _) => self.visit_expr(expr),
         }
     }
 

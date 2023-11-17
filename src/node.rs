@@ -50,6 +50,7 @@ pub enum Predicate {
     Not(Box<Predicate>),
     IsUnknown(Box<Predicate>),
     StartsWith(Box<Expr>, Value),
+    LikeRegex(Box<Expr>, String, Option<String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +198,13 @@ impl Display for Predicate {
             Self::Not(expr) => write!(f, "!({expr})"),
             Self::IsUnknown(expr) => write!(f, "{expr} is unknown"),
             Self::StartsWith(expr, v) => write!(f, "({expr} starts with {v})"),
+            Self::LikeRegex(expr, v, flag) => {
+                write!(f, "({expr} like_regex {v}")?;
+                if let Some(flag) = flag {
+                    write!(f, " flag {flag}")?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
