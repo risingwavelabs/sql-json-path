@@ -1,5 +1,10 @@
 //! [SQL/JSON Path] implementation in Rust.
 //!
+//! # Features
+//!
+//! - Compatible with [SQL/JSON Path] standard and PostgreSQL implementation.
+//! - Independent from JSON implementation. It supports popular libraries like [`serde-json`]. [Custom] JSON types are also supported.
+//!
 //! # Usage
 //!
 //! ```rust
@@ -15,12 +20,16 @@
 //! ```
 //!
 //! [SQL/JSON Path]: https://github.com/obartunov/sqljsondoc/blob/master/jsonpath.md
+//! [`serde-json`]: https://crates.io/crates/serde_json
+//! [`simd-json`]: https://crates.io/crates/simd-json
+//! [`jsonbb`]: https://crates.io/crates/jsonbb
+//! [Custom]: crate::json
 
+mod ast;
 mod eval;
-mod json;
-mod node;
+pub mod json;
 mod parser;
 
+pub use ast::JsonPath;
 pub use eval::Error as EvalError;
-pub use node::JsonPath;
 pub use parser::Error as ParseError;

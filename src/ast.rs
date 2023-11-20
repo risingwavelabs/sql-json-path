@@ -6,7 +6,7 @@ use std::ops::Deref;
 
 use serde_json::Number;
 
-/// Represents a set of JSON Path chains.
+/// A JSON Path value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonPath {
     pub(crate) mode: Mode,
@@ -40,58 +40,66 @@ pub enum Expr {
     BinaryOp(BinaryOp, Box<Expr>, Box<Expr>),
 }
 
-///
+/// A filter expression that evaluates to a truth value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Predicate {
-    /// Compare operation
+    /// `==`, `!=`, `<`, `<=`, `>`, `>=` represents the comparison between two values.
     Compare(CompareOp, Box<Expr>, Box<Expr>),
+    /// `exists` represents the value exists.
     Exists(Box<Expr>),
+    /// `&&` represents logical AND.
     And(Box<Predicate>, Box<Predicate>),
+    /// `||` represents logical OR.
     Or(Box<Predicate>, Box<Predicate>),
+    /// `!` represents logical NOT.
     Not(Box<Predicate>),
+    /// `is unknown` represents the value is unknown.
     IsUnknown(Box<Predicate>),
+    /// `starts with` represents the value starts with the given value.
     StartsWith(Box<Expr>, Value),
-    LikeRegex(Box<Expr>, Regex),
+    /// `like_regex` represents the value matches the given regular expression.
+    LikeRegex(Box<Expr>, Box<Regex>),
 }
 
+/// A primary expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathPrimary {
     /// `$` represents the root node or element.
     Root,
     /// `@` represents the current node or element being processed in the filter expression.
     Current,
-    /// Literal value.
-    Value(Value),
     /// `last` is the size of the array minus 1.
     Last,
+    /// Literal value.
+    Value(Value),
     /// `(expr)` represents an expression.
     ExprOrPred(Box<ExprOrPredicate>),
 }
 
-/// Represents a valid JSON Path.
+/// An accessor operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessorOp {
-    /// `.*` represents selecting all elements in an Object.
+    /// `.*` represents selecting all elements in an object.
     MemberWildcard,
-    /// `[*]` represents selecting all elements in an Array.
+    /// `[*]` represents selecting all elements in an array.
     ElementWildcard,
-    /// `.<name>` represents selecting element that matched the name in an Object, like `$.event`.
+    /// `.<name>` represents selecting element that matched the name in an object, like `$.event`.
     /// The name can also be written as a string literal, allowing the name to contain special characters, like `$." $price"`.
     Member(String),
     /// `[<index1>,<index2>,..]` represents selecting elements specified by the indices in an Array.
     Element(Vec<ArrayIndex>),
-    /// `?(<expression>)` represents selecting all elements in an object or array that match the filter expression, like `$.book[?(@.price < 10)]`.
+    /// `?(<predicate>)` represents filtering elements using the predicate.
     FilterExpr(Box<Predicate>),
     /// `.method()` represents calling a method.
     Method(Method),
 }
 
-/// Represents the index in an Array.
+/// An array index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArrayIndex {
     /// The single number index.
     Index(Expr),
-    /// The range index between two number.
+    /// `<start> to <end>` represents the slice of the array.
     Slice(Expr, Expr),
 }
 
@@ -151,14 +159,34 @@ pub enum BinaryOp {
     Rem,
 }
 
+/// A item method.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Method {
+    /// `.type()` returns a character string that names the type of the SQL/JSON item.
     Type,
+    /// `.size()` returns the size of an SQL/JSON item.
     Size,
+    /// `.double()` converts a string or numeric to an approximate numeric value.
     Double,
+    /// `.ceiling()` returns the smallest integer that is greater than or equal to the argument.
     Ceiling,
+    /// `.floor()` returns the largest integer that is less than or equal to the argument.
     Floor,
+    /// `.abs()` returns the absolute value of the argument.
     Abs,
+    /// `.keyvalue()` returns the key-value pairs of an object.
+    ///
+    /// For example, suppose:
+    /// ```json
+    /// { who: "Fred", what: 64 }
+    /// ```
+    /// Then:
+    /// ```json
+    /// $.keyvalue() =
+    /// ( { name: "who",  value: "Fred", id: 9045 },
+    ///   { name: "what", value: 64,     id: 9045 }
+    /// )
+    /// ```
     Keyvalue,
 }
 

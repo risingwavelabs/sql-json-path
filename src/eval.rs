@@ -1,12 +1,14 @@
 use serde_json::Number;
 
 use crate::{
+    ast::*,
     json::{ArrayRef, Cow, Json, JsonRef, ObjectRef},
-    node::*,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// The error type returned when evaluating a JSON path.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("jsonpath array accessor can only be applied to an array")]
@@ -37,8 +39,9 @@ pub enum Error {
     UnexpectedLast,
 }
 
+/// Truth value used in SQL/JSON path predicates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Truth {
+enum Truth {
     True,
     False,
     Unknown,
@@ -55,19 +58,23 @@ impl From<bool> for Truth {
 }
 
 impl Truth {
+    /// Returns true if the value is true.
     fn is_true(self) -> bool {
         matches!(self, Truth::True)
     }
 
+    /// Returns true if the value is false.
     #[allow(unused)]
     fn is_false(self) -> bool {
         matches!(self, Truth::False)
     }
 
+    /// Returns true if the value is unknown.
     fn is_unknown(self) -> bool {
         matches!(self, Truth::Unknown)
     }
 
+    /// AND operation.
     fn and(self, other: Self) -> Self {
         match (self, other) {
             (Truth::True, Truth::True) => Truth::True,
@@ -76,6 +83,7 @@ impl Truth {
         }
     }
 
+    /// OR operation.
     fn or(self, other: Self) -> Self {
         match (self, other) {
             (Truth::True, _) | (_, Truth::True) => Truth::True,
@@ -84,6 +92,7 @@ impl Truth {
         }
     }
 
+    /// NOT operation.
     fn not(self) -> Self {
         match self {
             Truth::True => Truth::False,
@@ -92,6 +101,7 @@ impl Truth {
         }
     }
 
+    /// Converts to JSON value.
     fn to_json<T: Json>(self) -> T {
         match self {
             Truth::True => T::bool(true),
@@ -102,10 +112,12 @@ impl Truth {
 }
 
 impl JsonPath {
+    /// Evaluate the JSON path against the given JSON value.
     pub fn query<'a, T: Json>(&self, value: T::Borrowed<'a>) -> Result<Vec<Cow<'a, T>>> {
         self.query_with_vars(value, T::Borrowed::null())
     }
 
+    /// Evaluate the JSON path against the given JSON value with variables.
     pub fn query_with_vars<'a, T: Json>(
         &self,
         value: T::Borrowed<'a>,
@@ -122,6 +134,7 @@ impl JsonPath {
     }
 }
 
+/// Evaluation context.
 #[derive(Debug, Clone, Copy)]
 struct Evaluator<'a, T: Json> {
     /// The current value referenced by `@`.
@@ -137,7 +150,9 @@ struct Evaluator<'a, T: Json> {
     mode: Mode,
 }
 
+/// Unwrap the result or return an empty result if the evaluator is in lax mode.
 macro_rules! lax {
+    // for `Option`
     ($self:expr, $expr:expr, $err:expr) => {
         match $expr {
             Some(x) => x,
@@ -145,6 +160,7 @@ macro_rules! lax {
             None => return Err($err),
         }
     };
+    // for `Result`
     ($self:expr, $expr:expr) => {
         match $expr {
             Ok(x) => x,
@@ -155,10 +171,12 @@ macro_rules! lax {
 }
 
 impl<'a, T: Json> Evaluator<'a, T> {
+    /// Returns true if the evaluator is in lax mode.
     fn is_lax(&self) -> bool {
         matches!(self.mode, Mode::Lax)
     }
 
+    /// Creates a new evaluator with the given current value.
     fn with_current<'b>(&self, current: T::Borrowed<'b>) -> Evaluator<'b, T>
     where
         'a: 'b,
@@ -172,6 +190,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         }
     }
 
+    /// Returns the value of the given variable.
     fn get_variable(&self, name: &str) -> Result<T::Borrowed<'a>> {
         self.vars
             .as_object()
@@ -180,6 +199,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
             .ok_or_else(|| Error::NoVariable(name.into()))
     }
 
+    /// Evaluates the expression or predicate.
     fn eval_expr_or_predicate(&self, expr: &ExprOrPredicate) -> Result<Vec<Cow<'a, T>>> {
         match expr {
             ExprOrPredicate::Expr(expr) => self.eval_expr(expr),
@@ -189,6 +209,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         }
     }
 
+    /// Evaluates the predicate.
     fn eval_predicate(&self, pred: &Predicate) -> Result<Truth> {
         match pred {
             Predicate::Compare(op, left, right) => {
@@ -296,6 +317,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         }
     }
 
+    /// Evaluates the expression.
     fn eval_expr(&self, expr: &Expr) -> Result<Vec<Cow<'a, T>>> {
         match expr {
             Expr::Accessor(primary, ops) => {
@@ -349,6 +371,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         }
     }
 
+    /// Evaluates the path primary.
     fn eval_path_primary(&self, primary: &PathPrimary) -> Result<Vec<Cow<'a, T>>> {
         match primary {
             PathPrimary::Root => Ok(vec![Cow::Borrowed(self.root.clone())]),
@@ -362,6 +385,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         }
     }
 
+    /// Evaluates the accessor operator.
     fn eval_accessor_op(&self, op: &AccessorOp) -> Result<Vec<Cow<'a, T>>> {
         match op {
             AccessorOp::MemberWildcard => {
@@ -389,6 +413,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         }
     }
 
+    /// Evaluates the element accessor.
     fn eval_element_accessor(&self, indices: &[ArrayIndex]) -> Result<Vec<Cow<'a, T>>> {
         let array = lax!(self, self.current.as_array(), Error::ArrayAccess);
         let mut elems = Vec::with_capacity(indices.len());
@@ -436,6 +461,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         Ok(elems)
     }
 
+    /// Evaluates the item method.
     fn eval_method(&self, method: &Method) -> Result<Cow<'a, T>> {
         match method {
             Method::Type => {
@@ -445,7 +471,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                     "boolean"
                 } else if self.current.is_number() {
                     "number"
-                } else if self.current.is_str() {
+                } else if self.current.is_string() {
                     "string"
                 } else if self.current.is_array() {
                     "array"
@@ -483,6 +509,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         }
     }
 
+    /// Evaluates the scalar value.
     fn eval_value(&self, value: &Value) -> Result<Cow<'a, T>> {
         Ok(match value {
             Value::Null => Cow::Owned(T::null()),
@@ -526,6 +553,7 @@ fn eval_compare<T: Json>(op: CompareOp, left: T::Borrowed<'_>, right: T::Borrowe
     Truth::Unknown
 }
 
+/// Evaluate the unary operator.
 fn eval_unary_op<T: Json>(op: UnaryOp, value: T::Borrowed<'_>) -> Result<T> {
     let n = value
         .as_number()
@@ -536,6 +564,7 @@ fn eval_unary_op<T: Json>(op: UnaryOp, value: T::Borrowed<'_>) -> Result<T> {
     })
 }
 
+/// Evaluate the binary operator.
 fn eval_binary_op<T: Json>(
     op: BinaryOp,
     left: T::Borrowed<'_>,
@@ -556,6 +585,7 @@ fn eval_binary_op<T: Json>(
     }))
 }
 
+/// Compare two values that implement `Ord`.
 fn compare_ord<T: Ord>(op: CompareOp, left: T, right: T) -> bool {
     use CompareOp::*;
     match op {
@@ -568,6 +598,7 @@ fn compare_ord<T: Ord>(op: CompareOp, left: T, right: T) -> bool {
     }
 }
 
+/// Extension methods for `Number`.
 trait NumberExt {
     fn equal(&self, other: &Self) -> bool;
     fn less_than(&self, other: &Self) -> bool;
@@ -581,6 +612,8 @@ trait NumberExt {
 
 impl NumberExt for Number {
     fn equal(&self, other: &Self) -> bool {
+        // The original `Eq` implementation of `Number` does not work
+        // if the two numbers have different types. (i64, u64, f64)
         self.as_f64().unwrap() == other.as_f64().unwrap()
     }
 
@@ -594,6 +627,7 @@ impl NumberExt for Number {
         } else if let Some(n) = self.as_f64() {
             Number::from_f64(-n).unwrap()
         } else {
+            // `as_f64` should always return a value
             unreachable!()
         }
     }

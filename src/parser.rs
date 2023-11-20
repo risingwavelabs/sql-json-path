@@ -1,6 +1,6 @@
-//! JSON Path parser.
+//! JSON Path parser written in [nom].
 
-use crate::node::*;
+use crate::ast::*;
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_while, take_while1},
@@ -52,6 +52,7 @@ impl FromStr for JsonPath {
     }
 }
 
+/// The error type returned when parsing a JSON Path.
 #[derive(Debug, thiserror::Error)]
 #[error("at position {position}, {message}")]
 pub struct Error {
@@ -83,9 +84,9 @@ fn expr_or_predicate(input: &str) -> IResult<&str, ExprOrPredicate> {
 
 fn mode(input: &str) -> IResult<&str, Mode> {
     alt((
-        value(Mode::Strict, tag("strict")),
-        value(Mode::Lax, tag("lax")),
-        value(Mode::Lax, tag("")),
+        value(Mode::Strict, tag_no_case("strict")),
+        value(Mode::Lax, tag_no_case("lax")),
+        value(Mode::Lax, tag_no_case("")),
     ))(input)
 }
 
@@ -119,27 +120,34 @@ fn predicate2(input: &str) -> IResult<&str, Predicate> {
             delimited(
                 pair(char('('), s),
                 predicate,
-                tuple((s, char(')'), s, tag("is"), s, tag("unknown"))),
+                tuple((
+                    s,
+                    char(')'),
+                    s,
+                    tag_no_case("is"),
+                    s,
+                    tag_no_case("unknown"),
+                )),
             ),
             |p| Predicate::IsUnknown(Box::new(p)),
         ),
         map(
             separated_pair(
                 expr,
-                tuple((s, tag("starts"), s, tag("with"), s)),
+                tuple((s, tag_no_case("starts"), s, tag_no_case("with"), s)),
                 starts_with_literal,
             ),
             |(expr, literal)| Predicate::StartsWith(Box::new(expr), literal),
         ),
         map_opt(
             pair(
-                separated_pair(expr, tuple((s, tag("like_regex"), s)), string),
-                opt(preceded(tuple((s, tag("flag"), s)), string)),
+                separated_pair(expr, tuple((s, tag_no_case("like_regex"), s)), string),
+                opt(preceded(tuple((s, tag_no_case("flag"), s)), string)),
             ),
             |((expr, pattern), flags)| {
                 Some(Predicate::LikeRegex(
                     Box::new(expr),
-                    Regex::with_flags(&pattern, flags).ok()?,
+                    Box::new(Regex::with_flags(&pattern, flags).ok()?),
                 ))
             },
         ),
@@ -155,7 +163,7 @@ fn delimited_predicate(input: &str) -> IResult<&str, Predicate> {
         delimited(pair(char('('), s), predicate, pair(s, char(')'))),
         map(
             delimited(
-                tuple((tag("exists"), s, char('('), s)),
+                tuple((tag_no_case("exists"), s, char('('), s)),
                 expr,
                 pair(s, char(')')),
             ),
@@ -221,7 +229,7 @@ fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
         map(scalar_value, PathPrimary::Value),
         value(PathPrimary::Root, char('$')),
         value(PathPrimary::Current, char('@')),
-        value(PathPrimary::Last, tag("last")),
+        value(PathPrimary::Last, tag_no_case("last")),
         map(
             delimited(pair(char('('), s), expr_or_predicate, pair(s, char(')'))),
             |expr| PathPrimary::ExprOrPred(Box::new(expr)),
@@ -296,13 +304,13 @@ fn item_method(input: &str) -> IResult<&str, Method> {
 
 fn method(input: &str) -> IResult<&str, Method> {
     alt((
-        value(Method::Type, tag("type")),
-        value(Method::Size, tag("size")),
-        value(Method::Double, tag("double")),
-        value(Method::Ceiling, tag("ceiling")),
-        value(Method::Floor, tag("floor")),
-        value(Method::Abs, tag("abs")),
-        value(Method::Keyvalue, tag("keyvalue")),
+        value(Method::Type, tag_no_case("type")),
+        value(Method::Size, tag_no_case("size")),
+        value(Method::Double, tag_no_case("double")),
+        value(Method::Ceiling, tag_no_case("ceiling")),
+        value(Method::Floor, tag_no_case("floor")),
+        value(Method::Abs, tag_no_case("abs")),
+        value(Method::Keyvalue, tag_no_case("keyvalue")),
     ))(input)
 }
 
@@ -398,6 +406,11 @@ fn raw_string(input: &str) -> IResult<&str, String> {
 }
 
 /// A visitor that checks if a JSON Path is valid.
+///
+/// An error is returned if:
+///
+/// - `@` is used in a non-root expression
+/// - `last` is used in a non-array subscript
 #[derive(Debug, Clone, Copy, Default)]
 struct Checker {
     non_root: bool,
