@@ -7,8 +7,12 @@
 //! - [`ArrayRef`]: A trait for borrowed JSON arrays.
 //! - [`ObjectRef`]: A trait for borrowed JSON objects.
 
-use serde_json::Number;
+use ::serde_json::Number;
 use std::fmt::{Debug, Display};
+
+mod serde_json;
+#[cfg(feature = "simd-json")]
+mod simd_json;
 
 /// A borrowed or owned JSON value.
 ///
@@ -17,7 +21,7 @@ use std::fmt::{Debug, Display};
 ///
 /// [`JsonPath::query`]: crate::JsonPath::query
 #[derive(Debug)]
-pub enum Cow<'a, T: Json> {
+pub enum Cow<'a, T: Json + 'a> {
     /// Borrowed data.
     Borrowed(T::Borrowed<'a>),
     /// Owned data.
@@ -57,9 +61,11 @@ where
 }
 
 /// A trait for owned JSON values.
-pub trait Json: Clone + Debug + 'static {
+pub trait Json: Clone + Debug {
     /// The type of borrowed JSON values.
-    type Borrowed<'a>: JsonRef<'a, Owned = Self>;
+    type Borrowed<'a>: JsonRef<'a, Owned = Self>
+    where
+        Self: 'a;
 
     /// Returns a reference to the JSON value.
     fn as_ref(&self) -> Self::Borrowed<'_>;
@@ -95,7 +101,7 @@ pub trait Json: Clone + Debug + 'static {
 /// A trait for borrowed JSON values.
 pub trait JsonRef<'a>: Copy + Debug {
     /// The type of owned JSON values.
-    type Owned: Json<Borrowed<'a> = Self>;
+    type Owned: Json<Borrowed<'a> = Self> + 'a;
 
     /// The type of borrowed JSON arrays.
     type Array: ArrayRef<'a, JsonRef = Self>;
@@ -181,126 +187,4 @@ pub trait ObjectRef<'a>: Copy {
 
     /// Returns all values in the object.
     fn list_value(self) -> Vec<Self::JsonRef>;
-}
-
-impl Json for serde_json::Value {
-    type Borrowed<'a> = &'a serde_json::Value;
-
-    fn as_ref(&self) -> Self::Borrowed<'_> {
-        self
-    }
-
-    fn null() -> Self {
-        serde_json::Value::Null
-    }
-
-    fn bool(b: bool) -> Self {
-        serde_json::Value::Bool(b)
-    }
-
-    fn from_u64(v: u64) -> Self {
-        Self::Number(Number::from(v))
-    }
-
-    fn from_i64(v: i64) -> Self {
-        Self::Number(Number::from(v))
-    }
-
-    fn from_f64(v: f64) -> Self {
-        Self::Number(Number::from_f64(v).unwrap())
-    }
-
-    fn from_number(n: Number) -> Self {
-        Self::Number(n)
-    }
-
-    fn from_string(s: &str) -> Self {
-        Self::String(s.to_owned())
-    }
-}
-
-impl<'a> JsonRef<'a> for &'a serde_json::Value {
-    type Owned = serde_json::Value;
-    type Array = &'a Vec<serde_json::Value>;
-    type Object = &'a serde_json::Map<String, serde_json::Value>;
-
-    fn to_owned(self) -> Self::Owned {
-        self.clone()
-    }
-
-    fn null() -> Self {
-        &serde_json::Value::Null
-    }
-
-    fn is_null(self) -> bool {
-        self.is_null()
-    }
-
-    fn as_bool(self) -> Option<bool> {
-        self.as_bool()
-    }
-
-    fn as_number(self) -> Option<Number> {
-        self.as_number().cloned()
-    }
-
-    fn as_str(self) -> Option<&'a str> {
-        self.as_str()
-    }
-
-    fn as_array(self) -> Option<Self::Array> {
-        self.as_array()
-    }
-
-    fn as_object(self) -> Option<Self::Object> {
-        self.as_object()
-    }
-
-    fn is_number(self) -> bool {
-        self.is_number()
-    }
-
-    fn is_string(self) -> bool {
-        self.is_string()
-    }
-
-    fn is_array(self) -> bool {
-        self.is_array()
-    }
-
-    fn is_object(self) -> bool {
-        self.is_object()
-    }
-}
-
-impl<'a> ArrayRef<'a> for &'a Vec<serde_json::Value> {
-    type JsonRef = &'a serde_json::Value;
-
-    fn len(self) -> usize {
-        self.len()
-    }
-
-    fn get(self, index: usize) -> Option<Self::JsonRef> {
-        (**self).get(index)
-    }
-
-    fn list(self) -> Vec<Self::JsonRef> {
-        self.iter().collect()
-    }
-}
-
-impl<'a> ObjectRef<'a> for &'a serde_json::Map<String, serde_json::Value> {
-    type JsonRef = &'a serde_json::Value;
-
-    fn len(self) -> usize {
-        self.len()
-    }
-
-    fn get(self, key: &str) -> Option<Self::JsonRef> {
-        self.get(key)
-    }
-
-    fn list_value(self) -> Vec<Self::JsonRef> {
-        self.values().collect()
-    }
 }

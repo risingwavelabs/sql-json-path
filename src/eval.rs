@@ -136,7 +136,7 @@ impl JsonPath {
 
 /// Evaluation context.
 #[derive(Debug, Clone, Copy)]
-struct Evaluator<'a, T: Json> {
+struct Evaluator<'a, T: Json + 'a> {
     /// The current value referenced by `@`.
     current: T::Borrowed<'a>,
     /// The root value referenced by `$`.
