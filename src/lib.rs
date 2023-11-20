@@ -3,7 +3,8 @@
 //! # Features
 //!
 //! - Compatible with [SQL/JSON Path] standard and PostgreSQL implementation.
-//! - Independent from JSON implementation. It supports popular libraries like [`serde-json`] and [`simd-json`]. [Custom] JSON types are also supported.
+//! - Independent from JSON implementation. It supports popular libraries like [`serde-json`],
+//!   [`simd-json`] and [`jsonbb`]. [Custom] JSON types are also supported.
 //!
 //! # Usage
 //!

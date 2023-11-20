@@ -10,6 +10,8 @@
 use ::serde_json::Number;
 use std::fmt::{Debug, Display};
 
+#[cfg(feature = "jsonbb")]
+mod jsonbb;
 mod serde_json;
 #[cfg(feature = "simd-json")]
 mod simd_json;
