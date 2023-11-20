@@ -128,7 +128,14 @@ impl Truth {
 impl JsonPath {
     /// Evaluate the JSON path against the given JSON value.
     pub fn query<'a, T: Json>(&self, value: T::Borrowed<'a>) -> Result<Vec<Cow<'a, T>>> {
-        self.query_with_vars(value, T::Borrowed::null())
+        Evaluator {
+            root: value,
+            current: value,
+            vars: T::Borrowed::null(),
+            array: T::Borrowed::null(),
+            mode: self.mode,
+        }
+        .eval_expr_or_predicate(&self.expr)
     }
 
     /// Evaluate the JSON path against the given JSON value with variables.
@@ -137,6 +144,9 @@ impl JsonPath {
         value: T::Borrowed<'a>,
         vars: T::Borrowed<'a>,
     ) -> Result<Vec<Cow<'a, T>>> {
+        if !vars.is_object() {
+            return Err(Error::VarsNotObject);
+        }
         Evaluator {
             root: value,
             current: value,
@@ -145,6 +155,24 @@ impl JsonPath {
             mode: self.mode,
         }
         .eval_expr_or_predicate(&self.expr)
+    }
+
+    /// Checks whether the JSON path returns any item for the specified JSON value.
+    pub fn exists<T: Json>(&self, value: T::Borrowed<'_>) -> Result<bool> {
+        // TODO: only checking existence can be more efficient
+        self.query::<T>(value).map(|v| !v.is_empty())
+    }
+
+    /// Checks whether the JSON path returns any item for the specified JSON value,
+    /// with variables.
+    pub fn exists_with_vars<'a, T: Json>(
+        &self,
+        value: T::Borrowed<'a>,
+        vars: T::Borrowed<'a>,
+    ) -> Result<bool> {
+        // TODO: only checking existence can be more efficient
+        self.query_with_vars::<T>(value, vars)
+            .map(|v| !v.is_empty())
     }
 }
 
@@ -208,7 +236,8 @@ impl<'a, T: Json> Evaluator<'a, T> {
     fn get_variable(&self, name: &str) -> Result<T::Borrowed<'a>> {
         self.vars
             .as_object()
-            .ok_or_else(|| Error::VarsNotObject)?
+            // no `vars` input
+            .ok_or_else(|| Error::NoVariable(name.into()))?
             .get(name)
             .ok_or_else(|| Error::NoVariable(name.into()))
     }
