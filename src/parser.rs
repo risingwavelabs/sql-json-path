@@ -383,9 +383,7 @@ fn escaped_char(input: &str) -> IResult<&str, char> {
 fn unescaped_str(input: &str) -> IResult<&str, &str> {
     context(
         "unescaped character",
-        verify(take_while(|chr| is_valid_unescaped_char(chr)), |s: &str| {
-            !s.is_empty()
-        }),
+        verify(take_while(is_valid_unescaped_char), |s: &str| !s.is_empty()),
     )(input)
 }
 

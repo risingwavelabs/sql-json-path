@@ -374,8 +374,8 @@ impl<'a, T: Json> Evaluator<'a, T> {
     /// Evaluates the path primary.
     fn eval_path_primary(&self, primary: &PathPrimary) -> Result<Vec<Cow<'a, T>>> {
         match primary {
-            PathPrimary::Root => Ok(vec![Cow::Borrowed(self.root.clone())]),
-            PathPrimary::Current => Ok(vec![Cow::Borrowed(self.current.clone())]),
+            PathPrimary::Root => Ok(vec![Cow::Borrowed(self.root)]),
+            PathPrimary::Current => Ok(vec![Cow::Borrowed(self.current)]),
             PathPrimary::Value(v) => Ok(vec![self.eval_value(v)?]),
             PathPrimary::Last => {
                 let array = self.array.as_array().ok_or_else(|| Error::UnexpectedLast)?;
@@ -404,7 +404,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
             AccessorOp::Element(indices) => self.eval_element_accessor(indices),
             AccessorOp::FilterExpr(pred) => {
                 if self.eval_predicate(pred)?.is_true() {
-                    Ok(vec![Cow::Borrowed(self.current.clone())])
+                    Ok(vec![Cow::Borrowed(self.current)])
                 } else {
                     Ok(vec![])
                 }
@@ -497,7 +497,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                     let n = s.parse::<f64>().map_err(|_| Error::InvalidDouble)?;
                     Ok(Cow::Owned(T::from_f64(n)))
                 } else if self.current.is_number() {
-                    Ok(Cow::Borrowed(self.current.clone()))
+                    Ok(Cow::Borrowed(self.current))
                 } else {
                     Err(Error::DoubleTypeError)
                 }

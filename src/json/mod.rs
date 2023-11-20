@@ -174,6 +174,11 @@ pub trait ArrayRef<'a>: Copy {
 
     /// Returns all values in the array.
     fn list(self) -> Vec<Self::JsonRef>;
+
+    /// Returns `true` if the array is empty.
+    fn is_empty(self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// A trait for borrowed JSON objects.
@@ -189,4 +194,9 @@ pub trait ObjectRef<'a>: Copy {
 
     /// Returns all values in the object.
     fn list_value(self) -> Vec<Self::JsonRef>;
+
+    /// Returns `true` if the array is empty.
+    fn is_empty(self) -> bool {
+        self.len() == 0
+    }
 }
