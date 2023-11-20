@@ -59,6 +59,7 @@ impl Truth {
         matches!(self, Truth::True)
     }
 
+    #[allow(unused)]
     fn is_false(self) -> bool {
         matches!(self, Truth::False)
     }
@@ -278,7 +279,20 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 }
                 Ok(result)
             }
-            Predicate::LikeRegex(expr, pattern, flag) => todo!(),
+            Predicate::LikeRegex(expr, regex) => {
+                let Ok(set) = self.eval_expr(expr) else {
+                    return Ok(Truth::Unknown);
+                };
+                let mut result = Truth::False;
+                for v in set {
+                    let res = v.as_ref().as_str().map_or(false, |s| regex.is_match(s));
+                    result = result.or(res.into());
+                    if result.is_true() {
+                        break;
+                    }
+                }
+                Ok(result)
+            }
         }
     }
 

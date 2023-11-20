@@ -299,6 +299,101 @@ fn query_last() {
     );
 }
 
+#[test]
+fn query_regex() {
+    assert_eq!(
+        jsonb_path_query(
+            r#"[null, 1, "abc", "abd", "aBdC", "abdacb", "babc", "adc\nabc", "ab\nadc"]"#,
+            r#"lax $[*] ? (@ like_regex "^ab.*c")"#
+        ),
+        Ok(vec![r#""abc""#.into(), r#""abdacb""#.into()])
+    );
+
+    assert_eq!(
+        jsonb_path_query(
+            r#"[null, 1, "abc", "abd", "aBdC", "abdacb", "babc", "adc\nabc", "ab\nadc"]"#,
+            r#"lax $[*] ? (@ like_regex "^ab.*c" flag "i")"#
+        ),
+        Ok(vec![
+            r#""abc""#.into(),
+            r#""aBdC""#.into(),
+            r#""abdacb""#.into()
+        ])
+    );
+
+    assert_eq!(
+        jsonb_path_query(
+            r#"[null, 1, "abc", "abd", "aBdC", "abdacb", "babc", "adc\nabc", "ab\nadc"]"#,
+            r#"lax $[*] ? (@ like_regex "^ab.*c" flag "m")"#
+        ),
+        Ok(vec![
+            r#""abc""#.into(),
+            r#""abdacb""#.into(),
+            r#""adc\nabc""#.into()
+        ])
+    );
+
+    assert_eq!(
+        jsonb_path_query(
+            r#"[null, 1, "abc", "abd", "aBdC", "abdacb", "babc", "adc\nabc", "ab\nadc"]"#,
+            r#"lax $[*] ? (@ like_regex "^ab.*c" flag "s")"#
+        ),
+        Ok(vec![
+            r#""abc""#.into(),
+            r#""abdacb""#.into(),
+            r#""ab\nadc""#.into()
+        ])
+    );
+
+    assert_eq!(
+        jsonb_path_query(
+            r#"[null, 1, "a\b", "a\\b", "^a\\b$"]"#,
+            r#"lax $[*] ? (@ like_regex "a\\b" flag "q")"#
+        ),
+        Ok(vec![r#""a\\b""#.into(), r#""^a\\b$""#.into()])
+    );
+
+    // assert_eq!(
+    //     jsonb_path_query(
+    //         r#"[null, 1, "a\b", "a\\b", "^a\\b$"]"#,
+    //         r#"lax $[*] ? (@ like_regex "a\\b" flag "")"#
+    //     ),
+    //     Ok(vec![r#""a\b""#.into()])
+    // );
+
+    // assert_eq!(
+    //     jsonb_path_query(
+    //         r#"[null, 1, "a\b", "a\\b", "^a\\b$"]"#,
+    //         r#"lax $[*] ? (@ like_regex "^a\\b$" flag "q")"#
+    //     ),
+    //     Ok(vec![r#""^a\\b$""#.into()])
+    // );
+
+    assert_eq!(
+        jsonb_path_query(
+            r#"[null, 1, "a\b", "a\\b", "^a\\b$"]"#,
+            r#"lax $[*] ? (@ like_regex "^a\\B$" flag "q")"#
+        ),
+        Ok(vec![])
+    );
+
+    assert_eq!(
+        jsonb_path_query(
+            r#"[null, 1, "a\b", "a\\b", "^a\\b$"]"#,
+            r#"lax $[*] ? (@ like_regex "^a\\B$" flag "iq")"#
+        ),
+        Ok(vec![r#""^a\\b$""#.into()])
+    );
+
+    // assert_eq!(
+    //     jsonb_path_query(
+    //         r#"[null, 1, "a\b", "a\\b", "^a\\b$"]"#,
+    //         r#"lax $[*] ? (@ like_regex "^a\\b$" flag "")"#
+    //     ),
+    //     Ok(vec![r#""a\b""#.into()])
+    // );
+}
+
 fn jsonb_path_exists(json: &str, path: &str) -> Result<bool, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
     let path = JsonPath::from_str(path).unwrap();

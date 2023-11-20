@@ -2,6 +2,7 @@
 
 use std::fmt::Display;
 use std::fmt::Formatter;
+use std::ops::Deref;
 
 use serde_json::Number;
 
@@ -50,7 +51,7 @@ pub enum Predicate {
     Not(Box<Predicate>),
     IsUnknown(Box<Predicate>),
     StartsWith(Box<Expr>, Value),
-    LikeRegex(Box<Expr>, String, Option<String>),
+    LikeRegex(Box<Expr>, Regex),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,10 +199,10 @@ impl Display for Predicate {
             Self::Not(expr) => write!(f, "!({expr})"),
             Self::IsUnknown(expr) => write!(f, "{expr} is unknown"),
             Self::StartsWith(expr, v) => write!(f, "({expr} starts with {v})"),
-            Self::LikeRegex(expr, v, flag) => {
-                write!(f, "({expr} like_regex {v}")?;
-                if let Some(flag) = flag {
-                    write!(f, " flag {flag}")?;
+            Self::LikeRegex(expr, regex) => {
+                write!(f, "({expr} like_regex {}", regex.pattern())?;
+                if let Some(flags) = regex.flags() {
+                    write!(f, " flag {flags}")?;
                 }
                 write!(f, ")")
             }
@@ -327,3 +328,56 @@ impl Display for Method {
         }
     }
 }
+
+/// A wrapper of `regex::Regex` to combine the pattern and flags.
+#[derive(Debug, Clone)]
+pub struct Regex {
+    regex: regex::Regex,
+    flags: Option<String>,
+}
+
+impl Regex {
+    pub(crate) fn with_flags(pattern: &str, flags: Option<String>) -> Result<Self, regex::Error> {
+        let mut builder = match flags.as_deref() {
+            Some(flags) if flags.contains('q') => regex::RegexBuilder::new(&regex::escape(pattern)),
+            _ => regex::RegexBuilder::new(pattern),
+        };
+        if let Some(flags) = flags.as_deref() {
+            if flags.contains('i') {
+                builder.case_insensitive(true);
+            }
+            if flags.contains('m') {
+                builder.multi_line(true);
+            }
+            if flags.contains('s') {
+                builder.dot_matches_new_line(true);
+            }
+        }
+        let regex = builder.build()?;
+        Ok(Self { regex, flags })
+    }
+
+    pub fn pattern(&self) -> &str {
+        self.regex.as_str()
+    }
+
+    pub fn flags(&self) -> Option<&str> {
+        self.flags.as_deref()
+    }
+}
+
+impl Deref for Regex {
+    type Target = regex::Regex;
+
+    fn deref(&self) -> &Self::Target {
+        &self.regex
+    }
+}
+
+impl PartialEq for Regex {
+    fn eq(&self, other: &Self) -> bool {
+        self.pattern() == other.pattern() && self.flags() == other.flags()
+    }
+}
+
+impl Eq for Regex {}
