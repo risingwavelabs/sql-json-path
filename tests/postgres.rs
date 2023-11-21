@@ -319,6 +319,14 @@ fn query_last() {
 }
 
 #[test]
+fn division_by_zero() {
+    assert_eq!(
+        jsonb_path_query(r#"[12, {"a": 13}, {"b": 14}]"#, r#"lax $[0 to 10 / 0].a"#),
+        Err(EvalError::DivisionByZero)
+    );
+}
+
+#[test]
 fn query_regex() {
     assert_eq!(
         jsonb_path_query(

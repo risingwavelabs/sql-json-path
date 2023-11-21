@@ -51,6 +51,8 @@ pub enum Error {
     InvalidDouble,
     #[error("LAST is allowed only in array subscripts")]
     UnexpectedLast,
+    #[error("division by zero")]
+    DivisionByZero,
 }
 
 /// Truth value used in SQL/JSON path predicates.
@@ -619,8 +621,8 @@ fn eval_binary_op<T: Json>(
         BinaryOp::Add => left.add(&right),
         BinaryOp::Sub => left.sub(&right),
         BinaryOp::Mul => left.mul(&right),
-        BinaryOp::Div => left.div(&right),
-        BinaryOp::Rem => left.rem(&right),
+        BinaryOp::Div => left.div(&right)?,
+        BinaryOp::Rem => left.rem(&right)?,
     }))
 }
 
@@ -638,15 +640,15 @@ fn compare_ord<T: Ord>(op: CompareOp, left: T, right: T) -> bool {
 }
 
 /// Extension methods for `Number`.
-trait NumberExt {
+trait NumberExt: Sized {
     fn equal(&self, other: &Self) -> bool;
     fn less_than(&self, other: &Self) -> bool;
     fn neg(&self) -> Self;
     fn add(&self, other: &Self) -> Self;
     fn sub(&self, other: &Self) -> Self;
     fn mul(&self, other: &Self) -> Self;
-    fn div(&self, other: &Self) -> Self;
-    fn rem(&self, other: &Self) -> Self;
+    fn div(&self, other: &Self) -> Result<Self>;
+    fn rem(&self, other: &Self) -> Result<Self>;
 }
 
 impl NumberExt for Number {
@@ -701,21 +703,33 @@ impl NumberExt for Number {
         }
     }
 
-    fn div(&self, other: &Self) -> Self {
+    fn div(&self, other: &Self) -> Result<Self> {
         if let (Some(a), Some(b)) = (self.as_i64(), other.as_i64()) {
-            Number::from(a / b)
+            if b == 0 {
+                return Err(Error::DivisionByZero);
+            }
+            Ok(Number::from(a / b))
         } else if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
-            Number::from_f64(a / b).unwrap()
+            if b == 0.0 {
+                return Err(Error::DivisionByZero);
+            }
+            Ok(Number::from_f64(a / b).unwrap())
         } else {
             unreachable!()
         }
     }
 
-    fn rem(&self, other: &Self) -> Self {
+    fn rem(&self, other: &Self) -> Result<Self> {
         if let (Some(a), Some(b)) = (self.as_i64(), other.as_i64()) {
-            Number::from(a % b)
+            if b == 0 {
+                return Err(Error::DivisionByZero);
+            }
+            Ok(Number::from(a % b))
         } else if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
-            Number::from_f64(a % b).unwrap()
+            if b == 0.0 {
+                return Err(Error::DivisionByZero);
+            }
+            Ok(Number::from_f64(a % b).unwrap())
         } else {
             unreachable!()
         }
