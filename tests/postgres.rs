@@ -416,13 +416,13 @@ fn query_regex() {
 fn jsonb_path_exists(json: &str, path: &str) -> Result<bool, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
     let path = JsonPath::from_str(path).unwrap();
-    let list = path.query::<serde_json::Value>(&json)?;
+    let list = path.query(&json)?;
     Ok(!list.is_empty())
 }
 
 fn jsonb_path_query(json: &str, path: &str) -> Result<Vec<String>, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
     let path = JsonPath::from_str(path).unwrap();
-    let list = path.query::<serde_json::Value>(&json)?;
+    let list = path.query(&json)?;
     Ok(list.into_iter().map(|v| v.to_string()).collect())
 }

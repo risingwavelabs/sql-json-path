@@ -29,7 +29,7 @@
 //! let json = json!({"a": 1});
 //! let path = JsonPath::new("$.a").unwrap();
 //!
-//! let nodes = path.query::<Value>(&json).unwrap();
+//! let nodes = path.query(&json).unwrap();
 //! assert_eq!(nodes.len(), 1);
 //! assert_eq!(nodes[0].to_string(), "1");
 //! ```

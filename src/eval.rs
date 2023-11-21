@@ -127,23 +127,23 @@ impl Truth {
 
 impl JsonPath {
     /// Evaluate the JSON path against the given JSON value.
-    pub fn query<'a, T: Json>(&self, value: T::Borrowed<'a>) -> Result<Vec<Cow<'a, T>>> {
+    pub fn query<'a, T: JsonRef<'a>>(&self, value: T) -> Result<Vec<Cow<'a, T::Owned>>> {
         Evaluator {
             root: value,
             current: value,
-            vars: T::Borrowed::null(),
-            array: T::Borrowed::null(),
+            vars: T::null(),
+            array: T::null(),
             mode: self.mode,
         }
         .eval_expr_or_predicate(&self.expr)
     }
 
     /// Evaluate the JSON path against the given JSON value with variables.
-    pub fn query_with_vars<'a, T: Json>(
+    pub fn query_with_vars<'a, T: JsonRef<'a>>(
         &self,
-        value: T::Borrowed<'a>,
-        vars: T::Borrowed<'a>,
-    ) -> Result<Vec<Cow<'a, T>>> {
+        value: T,
+        vars: T,
+    ) -> Result<Vec<Cow<'a, T::Owned>>> {
         if !vars.is_object() {
             return Err(Error::VarsNotObject);
         }
@@ -151,25 +151,21 @@ impl JsonPath {
             root: value,
             current: value,
             vars,
-            array: T::Borrowed::null(),
+            array: T::null(),
             mode: self.mode,
         }
         .eval_expr_or_predicate(&self.expr)
     }
 
     /// Checks whether the JSON path returns any item for the specified JSON value.
-    pub fn exists<T: Json>(&self, value: T::Borrowed<'_>) -> Result<bool> {
+    pub fn exists<'a, T: JsonRef<'a>>(&self, value: T) -> Result<bool> {
         // TODO: only checking existence can be more efficient
         self.query::<T>(value).map(|v| !v.is_empty())
     }
 
     /// Checks whether the JSON path returns any item for the specified JSON value,
     /// with variables.
-    pub fn exists_with_vars<'a, T: Json>(
-        &self,
-        value: T::Borrowed<'a>,
-        vars: T::Borrowed<'a>,
-    ) -> Result<bool> {
+    pub fn exists_with_vars<'a, T: JsonRef<'a>>(&self, value: T, vars: T) -> Result<bool> {
         // TODO: only checking existence can be more efficient
         self.query_with_vars::<T>(value, vars)
             .map(|v| !v.is_empty())
