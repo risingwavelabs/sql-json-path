@@ -47,6 +47,8 @@ pub enum Error {
     VarsNotObject,
     #[error("jsonpath item method .double() can only be applied to a string or numeric value")]
     DoubleTypeError,
+    #[error("jsonpath item method .{0}() can only be applied to a numeric value")]
+    ExpectNumeric(&'static str),
     #[error("string argument of jsonpath item method .double() is not a valid representation of a double precision number")]
     InvalidDouble,
     #[error("LAST is allowed only in array subscripts")]
@@ -543,9 +545,27 @@ impl<'a, T: Json> Evaluator<'a, T> {
                     Err(Error::DoubleTypeError)
                 }
             }
-            Method::Ceiling => todo!(),
-            Method::Floor => todo!(),
-            Method::Abs => todo!(),
+            Method::Ceiling => {
+                let n = self
+                    .current
+                    .as_number()
+                    .ok_or(Error::ExpectNumeric("ceiling"))?;
+                Ok(Cow::Owned(T::from_number(n.ceil())))
+            }
+            Method::Floor => {
+                let n = self
+                    .current
+                    .as_number()
+                    .ok_or(Error::ExpectNumeric("floor"))?;
+                Ok(Cow::Owned(T::from_number(n.floor())))
+            }
+            Method::Abs => {
+                let n = self
+                    .current
+                    .as_number()
+                    .ok_or(Error::ExpectNumeric("abs"))?;
+                Ok(Cow::Owned(T::from_number(n.abs())))
+            }
             Method::Keyvalue => todo!(),
         }
     }
@@ -649,6 +669,9 @@ trait NumberExt: Sized {
     fn mul(&self, other: &Self) -> Self;
     fn div(&self, other: &Self) -> Result<Self>;
     fn rem(&self, other: &Self) -> Result<Self>;
+    fn ceil(&self) -> Self;
+    fn floor(&self) -> Self;
+    fn abs(&self) -> Self;
 }
 
 impl NumberExt for Number {
@@ -730,6 +753,32 @@ impl NumberExt for Number {
                 return Err(Error::DivisionByZero);
             }
             Ok(Number::from_f64(a % b).unwrap())
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn ceil(&self) -> Self {
+        if self.is_f64() {
+            Number::from(self.as_f64().unwrap().ceil() as i64)
+        } else {
+            self.clone()
+        }
+    }
+
+    fn floor(&self) -> Self {
+        if self.is_f64() {
+            Number::from(self.as_f64().unwrap().floor() as i64)
+        } else {
+            self.clone()
+        }
+    }
+
+    fn abs(&self) -> Self {
+        if let Some(n) = self.as_i64() {
+            Number::from(n.abs())
+        } else if let Some(n) = self.as_f64() {
+            Number::from_f64(n.abs()).unwrap()
         } else {
             unreachable!()
         }

@@ -327,6 +327,40 @@ fn division_by_zero() {
 }
 
 #[test]
+fn numeric_methods() {
+    assert_eq!(
+        jsonb_path_query(r#"[0, 1, -2, -3.4, 5.6]"#, r#"lax $[*].abs()"#),
+        Ok(vec![
+            "0".into(),
+            "1".into(),
+            "2".into(),
+            "3.4".into(),
+            "5.6".into()
+        ])
+    );
+    assert_eq!(
+        jsonb_path_query(r#"[0, 1, -2, -3.4, 5.6]"#, r#"lax $[*].floor()"#),
+        Ok(vec![
+            "0".into(),
+            "1".into(),
+            "-2".into(),
+            "-4".into(),
+            "5".into()
+        ])
+    );
+    assert_eq!(
+        jsonb_path_query(r#"[0, 1, -2, -3.4, 5.6]"#, r#"lax $[*].ceiling()"#),
+        Ok(vec![
+            "0".into(),
+            "1".into(),
+            "-2".into(),
+            "-3".into(),
+            "6".into()
+        ])
+    );
+}
+
+#[test]
 fn query_regex() {
     assert_eq!(
         jsonb_path_query(
