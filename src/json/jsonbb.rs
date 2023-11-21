@@ -49,6 +49,11 @@ impl super::Json for Value {
     fn from_string(s: &str) -> Self {
         Value::from(s)
     }
+
+    fn object<'a, I: IntoIterator<Item = (&'a str, Self)>>(iter: I) -> Self {
+        let kvs: Vec<_> = iter.into_iter().collect();
+        Value::object(kvs.iter().map(|(k, v)| (*k, v.as_ref())))
+    }
 }
 
 impl<'a> super::JsonRef<'a> for ValueRef<'a> {
@@ -130,6 +135,10 @@ impl<'a> super::ObjectRef<'a> for ObjectRef<'a> {
 
     fn get(self, key: &str) -> Option<Self::JsonRef> {
         self.get(key)
+    }
+
+    fn list(self) -> Vec<(&'a str, Self::JsonRef)> {
+        self.iter().collect()
     }
 
     fn list_value(self) -> Vec<Self::JsonRef> {

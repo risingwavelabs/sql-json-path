@@ -49,6 +49,10 @@ impl Json for Value {
     fn from_string(s: &str) -> Self {
         Self::String(s.to_owned())
     }
+
+    fn object<'a, I: IntoIterator<Item = (&'a str, Self)>>(iter: I) -> Self {
+        Self::Object(iter.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+    }
 }
 
 impl<'a> JsonRef<'a> for &'a Value {
@@ -130,6 +134,10 @@ impl<'a> ObjectRef<'a> for &'a Map<String, Value> {
 
     fn get(self, key: &str) -> Option<Self::JsonRef> {
         self.get(key)
+    }
+
+    fn list(self) -> Vec<(&'a str, Self::JsonRef)> {
+        self.iter().map(|(k, v)| (k.as_str(), v)).collect()
     }
 
     fn list_value(self) -> Vec<Self::JsonRef> {

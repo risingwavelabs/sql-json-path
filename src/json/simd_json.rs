@@ -61,6 +61,14 @@ impl<'b> Json for BorrowedValue<'b> {
     fn from_string(s: &str) -> Self {
         BorrowedValue::from(s.to_string())
     }
+
+    fn object<'a, I: IntoIterator<Item = (&'a str, Self)>>(iter: I) -> Self {
+        Self::from(
+            iter.into_iter()
+                .map(|(k, v)| (k.to_string().into(), v))
+                .collect::<BorrowedObject>(),
+        )
+    }
 }
 
 impl<'a, 'b> JsonRef<'a> for &'a BorrowedValue<'b> {
@@ -149,6 +157,10 @@ impl<'a, 'b> ObjectRef<'a> for &'a BorrowedObject<'b> {
         self.get(key)
     }
 
+    fn list(self) -> Vec<(&'a str, Self::JsonRef)> {
+        self.iter().map(|(k, v)| (k.as_ref(), v)).collect()
+    }
+
     fn list_value(self) -> Vec<Self::JsonRef> {
         self.values().collect()
     }
@@ -193,6 +205,14 @@ impl Json for OwnedValue {
 
     fn from_string(s: &str) -> Self {
         OwnedValue::from(s.to_string())
+    }
+
+    fn object<'a, I: IntoIterator<Item = (&'a str, Self)>>(iter: I) -> Self {
+        Self::from(
+            iter.into_iter()
+                .map(|(k, v)| (k.to_owned(), v))
+                .collect::<OwnedObject>(),
+        )
     }
 }
 
@@ -280,6 +300,10 @@ impl<'a> ObjectRef<'a> for &'a OwnedObject {
 
     fn get(self, key: &str) -> Option<Self::JsonRef> {
         self.get(key)
+    }
+
+    fn list(self) -> Vec<(&'a str, Self::JsonRef)> {
+        self.iter().map(|(k, v)| (k.as_str(), v)).collect()
     }
 
     fn list_value(self) -> Vec<Self::JsonRef> {

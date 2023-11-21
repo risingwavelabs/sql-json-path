@@ -47,10 +47,12 @@ pub enum Error {
     VarsNotObject,
     #[error("jsonpath item method .double() can only be applied to a string or numeric value")]
     DoubleTypeError,
-    #[error("jsonpath item method .{0}() can only be applied to a numeric value")]
-    ExpectNumeric(&'static str),
     #[error("string argument of jsonpath item method .double() is not a valid representation of a double precision number")]
     InvalidDouble,
+    #[error("jsonpath item method .{0}() can only be applied to a numeric value")]
+    ExpectNumeric(&'static str),
+    #[error("jsonpath item method .keyvalue() can only be applied to an object")]
+    KeyValueNotObject,
     #[error("LAST is allowed only in array subscripts")]
     UnexpectedLast,
     #[error("division by zero")]
@@ -452,7 +454,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                     Ok(vec![])
                 }
             }
-            AccessorOp::Method(method) => self.eval_method(method).map(|v| vec![v]),
+            AccessorOp::Method(method) => self.eval_method(method),
         }
     }
 
@@ -505,72 +507,99 @@ impl<'a, T: Json> Evaluator<'a, T> {
     }
 
     /// Evaluates the item method.
-    fn eval_method(&self, method: &Method) -> Result<Cow<'a, T>> {
+    fn eval_method(&self, method: &Method) -> Result<Vec<Cow<'a, T>>> {
         match method {
-            Method::Type => {
-                let s = if self.current.is_null() {
-                    "null"
-                } else if self.current.is_bool() {
-                    "boolean"
-                } else if self.current.is_number() {
-                    "number"
-                } else if self.current.is_string() {
-                    "string"
-                } else if self.current.is_array() {
-                    "array"
-                } else if self.current.is_object() {
-                    "object"
-                } else {
-                    unreachable!()
-                };
-                Ok(Cow::Owned(T::from_string(s)))
-            }
-            Method::Size => {
-                let size = if let Some(array) = self.current.as_array() {
-                    // The size of an SQL/JSON array is the number of elements in the array.
-                    array.len()
-                } else {
-                    // The size of an SQL/JSON object or a scalar is 1.
-                    1
-                };
-                Ok(Cow::Owned(T::from_u64(size as u64)))
-            }
-            Method::Double => {
-                if let Some(s) = self.current.as_str() {
-                    let n = s.parse::<f64>().map_err(|_| Error::InvalidDouble)?;
-                    if n.is_infinite() || n.is_nan() {
-                        return Err(Error::InvalidDouble);
-                    }
-                    Ok(Cow::Owned(T::from_f64(n)))
-                } else if self.current.is_number() {
-                    Ok(Cow::Borrowed(self.current))
-                } else {
-                    Err(Error::DoubleTypeError)
-                }
-            }
-            Method::Ceiling => {
-                let n = self
-                    .current
-                    .as_number()
-                    .ok_or(Error::ExpectNumeric("ceiling"))?;
-                Ok(Cow::Owned(T::from_number(n.ceil())))
-            }
-            Method::Floor => {
-                let n = self
-                    .current
-                    .as_number()
-                    .ok_or(Error::ExpectNumeric("floor"))?;
-                Ok(Cow::Owned(T::from_number(n.floor())))
-            }
-            Method::Abs => {
-                let n = self
-                    .current
-                    .as_number()
-                    .ok_or(Error::ExpectNumeric("abs"))?;
-                Ok(Cow::Owned(T::from_number(n.abs())))
-            }
-            Method::Keyvalue => todo!(),
+            Method::Type => self.eval_method_type().map(|v| vec![v]),
+            Method::Size => self.eval_method_size().map(|v| vec![v]),
+            Method::Double => self.eval_method_double().map(|v| vec![v]),
+            Method::Ceiling => self.eval_method_ceiling().map(|v| vec![v]),
+            Method::Floor => self.eval_method_floor().map(|v| vec![v]),
+            Method::Abs => self.eval_method_abs().map(|v| vec![v]),
+            Method::Keyvalue => self.eval_method_keyvalue(),
         }
+    }
+
+    fn eval_method_type(&self) -> Result<Cow<'a, T>> {
+        let s = if self.current.is_null() {
+            "null"
+        } else if self.current.is_bool() {
+            "boolean"
+        } else if self.current.is_number() {
+            "number"
+        } else if self.current.is_string() {
+            "string"
+        } else if self.current.is_array() {
+            "array"
+        } else if self.current.is_object() {
+            "object"
+        } else {
+            unreachable!()
+        };
+        Ok(Cow::Owned(T::from_string(s)))
+    }
+
+    fn eval_method_size(&self) -> Result<Cow<'a, T>> {
+        let size = if let Some(array) = self.current.as_array() {
+            // The size of an SQL/JSON array is the number of elements in the array.
+            array.len()
+        } else {
+            // The size of an SQL/JSON object or a scalar is 1.
+            1
+        };
+        Ok(Cow::Owned(T::from_u64(size as u64)))
+    }
+
+    fn eval_method_double(&self) -> Result<Cow<'a, T>> {
+        if let Some(s) = self.current.as_str() {
+            let n = s.parse::<f64>().map_err(|_| Error::InvalidDouble)?;
+            if n.is_infinite() || n.is_nan() {
+                return Err(Error::InvalidDouble);
+            }
+            Ok(Cow::Owned(T::from_f64(n)))
+        } else if self.current.is_number() {
+            Ok(Cow::Borrowed(self.current))
+        } else {
+            Err(Error::DoubleTypeError)
+        }
+    }
+
+    fn eval_method_ceiling(&self) -> Result<Cow<'a, T>> {
+        let n = self
+            .current
+            .as_number()
+            .ok_or(Error::ExpectNumeric("ceiling"))?;
+        Ok(Cow::Owned(T::from_number(n.ceil())))
+    }
+
+    fn eval_method_floor(&self) -> Result<Cow<'a, T>> {
+        let n = self
+            .current
+            .as_number()
+            .ok_or(Error::ExpectNumeric("floor"))?;
+        Ok(Cow::Owned(T::from_number(n.floor())))
+    }
+
+    fn eval_method_abs(&self) -> Result<Cow<'a, T>> {
+        let n = self
+            .current
+            .as_number()
+            .ok_or(Error::ExpectNumeric("abs"))?;
+        Ok(Cow::Owned(T::from_number(n.abs())))
+    }
+
+    fn eval_method_keyvalue(&self) -> Result<Vec<Cow<'a, T>>> {
+        let object = self.current.as_object().ok_or(Error::KeyValueNotObject)?;
+        Ok(object
+            .list()
+            .into_iter()
+            .map(|(k, v)| {
+                Cow::Owned(T::object([
+                    ("key", T::from_string(k)),
+                    ("value", v.to_owned()),
+                    ("id", T::from_i64(0)), // FIXME: provide unique id
+                ]))
+            })
+            .collect())
     }
 
     /// Evaluates the scalar value.

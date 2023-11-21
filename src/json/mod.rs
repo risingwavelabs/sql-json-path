@@ -107,6 +107,9 @@ pub trait Json: Clone + Debug {
     /// Returns a string value.
     fn from_string(s: &str) -> Self;
 
+    /// Returns an object.
+    fn object<'a, I: IntoIterator<Item = (&'a str, Self)>>(i: I) -> Self;
+
     /// Narrow down the lifetime of a borrowed value.
     fn borrow<'b, 'a: 'b>(p: Self::Borrowed<'a>) -> Self::Borrowed<'b> {
         // SAFETY: 'a: 'b => T::Borrowed<'a>: T::Borrowed<'b>
@@ -205,6 +208,9 @@ pub trait ObjectRef<'a>: Copy {
 
     /// Returns the value associated with the given key.
     fn get(self, key: &str) -> Option<Self::JsonRef>;
+
+    /// Returns all entries in the object.
+    fn list(self) -> Vec<(&'a str, Self::JsonRef)>;
 
     /// Returns all values in the object.
     fn list_value(self) -> Vec<Self::JsonRef>;
