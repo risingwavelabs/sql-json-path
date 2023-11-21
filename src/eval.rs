@@ -538,6 +538,9 @@ impl<'a, T: Json> Evaluator<'a, T> {
             Method::Double => {
                 if let Some(s) = self.current.as_str() {
                     let n = s.parse::<f64>().map_err(|_| Error::InvalidDouble)?;
+                    if n.is_infinite() || n.is_nan() {
+                        return Err(Error::InvalidDouble);
+                    }
                     Ok(Cow::Owned(T::from_f64(n)))
                 } else if self.current.is_number() {
                     Ok(Cow::Borrowed(self.current))
