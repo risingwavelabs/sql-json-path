@@ -204,6 +204,22 @@ macro_rules! lax {
             None => return Err($err),
         }
     };
+    // for `Option`
+    ($self:expr, $expr:expr, $err:expr; continue) => {
+        match $expr {
+            Some(x) => x,
+            None if $self.is_lax() => continue,
+            None => return Err($err),
+        }
+    };
+    // for `Option`
+    ($self:expr, $expr:expr, $err:expr; break) => {
+        match $expr {
+            Some(x) => x,
+            None if $self.is_lax() => break,
+            None => return Err($err),
+        }
+    };
     // for `Result`
     ($self:expr, $expr:expr) => {
         match $expr {
@@ -480,30 +496,32 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 set[0]
                     .as_ref()
                     .as_number()
-                    .ok_or(Error::ArrayIndexNotNumeric)
+                    .ok_or(Error::ArrayIndexNotNumeric)?
+                    .to_i64()
+                    .ok_or(Error::ArrayIndexOutOfRange)
             };
             match index {
                 ArrayIndex::Index(expr) => {
-                    let index_number = eval_index(expr)?;
-                    let index = index_number.to_i64().ok_or(Error::ArrayIndexOutOfRange)?;
-                    let index = lax!(self, index.try_into().ok(), Error::ArrayIndexOutOfBounds);
-                    let elem = lax!(self, array.get(index), Error::ArrayIndexOutOfBounds);
+                    let index = eval_index(expr)?;
+                    let index =
+                        lax!(self, index.try_into().ok(), Error::ArrayIndexOutOfBounds; continue);
+                    let elem = lax!(self, array.get(index), Error::ArrayIndexOutOfBounds; continue);
                     elems.push(Cow::Borrowed(elem));
                 }
                 ArrayIndex::Slice(begin, end) => {
-                    let begin_number = eval_index(begin)?;
-                    let end_number = eval_index(end)?;
-                    let begin = begin_number.to_i64().ok_or(Error::ArrayIndexOutOfRange)?;
+                    let begin = eval_index(begin)?;
+                    let end = eval_index(end)?;
                     let begin: usize =
-                        lax!(self, begin.try_into().ok(), Error::ArrayIndexOutOfBounds);
-                    let end = end_number.to_i64().ok_or(Error::ArrayIndexOutOfRange)?;
-                    let end: usize = lax!(self, end.try_into().ok(), Error::ArrayIndexOutOfBounds);
-                    lax!(
-                        self,
-                        (begin <= end && end < array.len()).then_some(()),
-                        Error::ArrayIndexOutOfBounds
-                    );
-                    elems.extend((begin..=end).map(|i| Cow::Borrowed(array.get(i).unwrap())));
+                        lax!(self, begin.try_into().ok(), Error::ArrayIndexOutOfBounds; continue);
+                    let end: usize =
+                        lax!(self, end.try_into().ok(), Error::ArrayIndexOutOfBounds; continue);
+                    if begin > end && !self.is_lax() {
+                        return Err(Error::ArrayIndexOutOfBounds);
+                    }
+                    for i in begin..=end {
+                        let elem = lax!(self, array.get(i), Error::ArrayIndexOutOfBounds; break);
+                        elems.push(Cow::Borrowed(elem));
+                    }
                 }
             }
         }
