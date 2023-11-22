@@ -314,7 +314,28 @@ fn query_last() {
     );
     assert_eq!(
         jsonb_path_query("[1,2,3]", r#"$[last ? (@.type() == "string")]"#),
-        Err(EvalError::ArraySubscriptNotNumeric)
+        Err(EvalError::ArrayIndexNotNumeric)
+    );
+}
+
+#[test]
+fn query_array_index() {
+    assert_eq!(
+        jsonb_path_query("[1]", "lax $[10000000000000000]"),
+        Err(EvalError::ArrayIndexOutOfRange)
+    );
+    assert_eq!(
+        jsonb_path_query("[1]", "strict $[10000000000000000]"),
+        Err(EvalError::ArrayIndexOutOfRange)
+    );
+    assert_eq!(jsonb_path_query("[1]", "$[0]"), Ok(vec!["1".into()]));
+    assert_eq!(jsonb_path_query("[1]", "$[0.3]"), Ok(vec!["1".into()]));
+    assert_eq!(jsonb_path_query("[1]", "$[0.5]"), Ok(vec!["1".into()]));
+    assert_eq!(jsonb_path_query("[1]", "$[0.9]"), Ok(vec!["1".into()]));
+    assert_eq!(jsonb_path_query("[1]", "$[1.2]"), Ok(vec![]));
+    assert_eq!(
+        jsonb_path_query("[1]", "strict $[1.2]"),
+        Err(EvalError::ArrayIndexOutOfBounds)
     );
 }
 

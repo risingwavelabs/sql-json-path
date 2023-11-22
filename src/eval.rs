@@ -31,30 +31,30 @@ pub enum Error {
     MemberAccess,
     #[error("jsonpath array subscript is out of bounds")]
     ArrayIndexOutOfBounds,
+    #[error("jsonpath array subscript is out of integer range")]
+    ArrayIndexOutOfRange,
+    #[error("jsonpath array subscript is not a single numeric value")]
+    ArrayIndexNotNumeric,
     #[error("JSON object does not contain key \"{0}\"")]
     NoKey(Box<str>),
+    #[error("could not find jsonpath variable \"{0}\"")]
+    NoVariable(Box<str>),
+    #[error("\"vars\" argument is not an object")]
+    VarsNotObject,
     #[error("operand of unary jsonpath operator {0} is not a numeric value")]
     UnaryOperandNotNumeric(UnaryOp),
     #[error("left operand of jsonpath operator {0} is not a single numeric value")]
     LeftOperandNotNumeric(BinaryOp),
     #[error("right operand of jsonpath operator {0} is not a single numeric value")]
     RightOperandNotNumeric(BinaryOp),
-    #[error("jsonpath array subscript is not a single numeric value")]
-    ArraySubscriptNotNumeric,
-    #[error("could not find jsonpath variable \"{0}\"")]
-    NoVariable(Box<str>),
-    #[error("\"vars\" argument is not an object")]
-    VarsNotObject,
+    #[error("jsonpath item method .{0}() can only be applied to a numeric value")]
+    MethodNotNumeric(&'static str),
     #[error("jsonpath item method .double() can only be applied to a string or numeric value")]
     DoubleTypeError,
     #[error("string argument of jsonpath item method .double() is not a valid representation of a double precision number")]
     InvalidDouble,
-    #[error("jsonpath item method .{0}() can only be applied to a numeric value")]
-    ExpectNumeric(&'static str),
     #[error("jsonpath item method .keyvalue() can only be applied to an object")]
     KeyValueNotObject,
-    #[error("LAST is allowed only in array subscripts")]
-    UnexpectedLast,
     #[error("division by zero")]
     DivisionByZero,
 }
@@ -423,7 +423,10 @@ impl<'a, T: Json> Evaluator<'a, T> {
             PathPrimary::Current => Ok(vec![Cow::Borrowed(self.current)]),
             PathPrimary::Value(v) => Ok(vec![self.eval_value(v)?]),
             PathPrimary::Last => {
-                let array = self.array.as_array().ok_or_else(|| Error::UnexpectedLast)?;
+                let array = self
+                    .array
+                    .as_array()
+                    .expect("LAST is allowed only in array subscripts");
                 Ok(vec![Cow::Owned(T::from_i64(array.len() as i64 - 1))])
             }
             PathPrimary::ExprOrPred(expr) => self.eval_expr_or_predicate(expr),
@@ -472,28 +475,29 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 }
                 .eval_expr(expr)?;
                 if set.len() != 1 {
-                    return Err(Error::ArraySubscriptNotNumeric);
+                    return Err(Error::ArrayIndexNotNumeric);
                 }
                 set[0]
                     .as_ref()
                     .as_number()
-                    .ok_or_else(|| Error::ArraySubscriptNotNumeric)
+                    .ok_or(Error::ArrayIndexNotNumeric)
             };
             match index {
                 ArrayIndex::Index(expr) => {
                     let index_number = eval_index(expr)?;
-                    let index =
-                        lax!(self, index_number.as_u64(), Error::ArrayIndexOutOfBounds) as usize;
+                    let index = index_number.to_i64().ok_or(Error::ArrayIndexOutOfRange)?;
+                    let index = lax!(self, index.try_into().ok(), Error::ArrayIndexOutOfBounds);
                     let elem = lax!(self, array.get(index), Error::ArrayIndexOutOfBounds);
                     elems.push(Cow::Borrowed(elem));
                 }
                 ArrayIndex::Slice(begin, end) => {
                     let begin_number = eval_index(begin)?;
                     let end_number = eval_index(end)?;
-                    let begin =
-                        lax!(self, begin_number.as_u64(), Error::ArrayIndexOutOfBounds) as usize;
-                    let end =
-                        lax!(self, end_number.as_u64(), Error::ArrayIndexOutOfBounds) as usize;
+                    let begin = begin_number.to_i64().ok_or(Error::ArrayIndexOutOfRange)?;
+                    let begin: usize =
+                        lax!(self, begin.try_into().ok(), Error::ArrayIndexOutOfBounds);
+                    let end = end_number.to_i64().ok_or(Error::ArrayIndexOutOfRange)?;
+                    let end: usize = lax!(self, end.try_into().ok(), Error::ArrayIndexOutOfBounds);
                     lax!(
                         self,
                         (begin <= end && end < array.len()).then_some(()),
@@ -567,7 +571,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         let n = self
             .current
             .as_number()
-            .ok_or(Error::ExpectNumeric("ceiling"))?;
+            .ok_or(Error::MethodNotNumeric("ceiling"))?;
         Ok(Cow::Owned(T::from_number(n.ceil())))
     }
 
@@ -575,7 +579,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         let n = self
             .current
             .as_number()
-            .ok_or(Error::ExpectNumeric("floor"))?;
+            .ok_or(Error::MethodNotNumeric("floor"))?;
         Ok(Cow::Owned(T::from_number(n.floor())))
     }
 
@@ -583,7 +587,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         let n = self
             .current
             .as_number()
-            .ok_or(Error::ExpectNumeric("abs"))?;
+            .ok_or(Error::MethodNotNumeric("abs"))?;
         Ok(Cow::Owned(T::from_number(n.abs())))
     }
 
@@ -704,6 +708,7 @@ trait NumberExt: Sized {
     fn ceil(&self) -> Self;
     fn floor(&self) -> Self;
     fn abs(&self) -> Self;
+    fn to_i64(&self) -> Option<i64>;
 }
 
 impl NumberExt for Number {
@@ -811,6 +816,30 @@ impl NumberExt for Number {
             Number::from(n.abs())
         } else if let Some(n) = self.as_f64() {
             Number::from_f64(n.abs()).unwrap()
+        } else {
+            unreachable!()
+        }
+    }
+
+    /// Converts to json integer if possible.
+    /// Float values are truncated.
+    /// Returns `None` if the value is out of range.
+    /// Range: [-2^53 + 1, 2^53 - 1]
+    fn to_i64(&self) -> Option<i64> {
+        const INT_MIN: i64 = -(1 << 53) + 1;
+        const INT_MAX: i64 = (1 << 53) - 1;
+        if let Some(i) = self.as_i64() {
+            if (INT_MIN..=INT_MAX).contains(&i) {
+                Some(i)
+            } else {
+                None
+            }
+        } else if let Some(f) = self.as_f64() {
+            if (INT_MIN as f64..=INT_MAX as f64).contains(&f) {
+                Some(f as i64)
+            } else {
+                None
+            }
         } else {
             unreachable!()
         }
