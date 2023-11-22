@@ -1,3 +1,7 @@
 #result {
     white-space: pre-wrap;
 }
+
+.error-border {
+    border: 2px solid #dc3545;
+}

@@ -1,24 +1,28 @@
 import * as wasm from './pkg/wasm.js';
 
 const jsonInput = document.getElementById('json-input');
-const jsonpathQuery = document.getElementById('jsonpath-query');
+const jsonpathInput = document.getElementById('jsonpath-input');
 const resultDisplay = document.getElementById('result');
 
 wasm.default().then(() => {
     const evaluate = () => {
         try {
-            const jsonPath = new wasm.JsonPath(jsonpathQuery.value);
+            const jsonPath = new wasm.JsonPath(jsonpathInput.value);
             const result = jsonPath.query(jsonInput.value);
             resultDisplay.textContent = result;
+            resultDisplay.classList.remove('error-border');
+            jsonpathInput.classList.remove('error-border');
             jsonPath.free();
         } catch (e) {
-            resultDisplay.textContent = 'Error: ' + e.message;
+            resultDisplay.textContent = e;
+            jsonpathInput.classList.add('error-border');
+            resultDisplay.classList.add('error-border');
         }
     };
 
     evaluate();
     jsonInput.addEventListener('input', evaluate);
-    jsonpathQuery.addEventListener('input', evaluate);
+    jsonpathInput.addEventListener('input', evaluate);
 });
 
 const examplePath = "($.store.book[*] ?(@.price < 10)).title";
@@ -60,4 +64,4 @@ const exampleJson = {
     "expensive": 10
 };
 jsonInput.value = JSON.stringify(exampleJson, null, 2);
-jsonpathQuery.value = examplePath;
+jsonpathInput.value = examplePath;
