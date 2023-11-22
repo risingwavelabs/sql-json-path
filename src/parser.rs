@@ -18,7 +18,7 @@ use crate::ast::*;
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_while, take_while1},
-    character::complete::{char, i64, multispace0 as s, u64},
+    character::complete::{char, multispace0 as s},
     combinator::{cut, map, map_opt, opt, value, verify},
     error::context,
     multi::{fold_many0, many0, separated_list1},
@@ -333,12 +333,20 @@ fn scalar_value(input: &str) -> IResult<&str, Value> {
         value(Value::Null, tag("null")),
         value(Value::Boolean(true), tag("true")),
         value(Value::Boolean(false), tag("false")),
-        map(u64, |v| Value::Number(Number::from(v))),
-        map(i64, |v| Value::Number(Number::from(v))),
-        map(double, |v| Value::Number(Number::from_f64(v).unwrap())),
+        map(number, |n| Value::Number(n)),
         map(string, Value::String),
         map(variable, Value::Variable),
     ))(input)
+}
+
+fn number(input: &str) -> IResult<&str, Number> {
+    map(double, |v| {
+        if v == v.trunc() {
+            Number::from(v as i64)
+        } else {
+            Number::from_f64(v).unwrap()
+        }
+    })(input)
 }
 
 fn starts_with_literal(input: &str) -> IResult<&str, Value> {
