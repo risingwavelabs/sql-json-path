@@ -782,12 +782,7 @@ impl NumberExt for Number {
     }
 
     fn div(&self, other: &Self) -> Result<Self> {
-        if let (Some(a), Some(b)) = (self.as_i64(), other.as_i64()) {
-            if b == 0 {
-                return Err(Error::DivisionByZero);
-            }
-            Ok(Number::from(a / b))
-        } else if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
+        if let (Some(a), Some(b)) = (self.as_f64(), other.as_f64()) {
             if b == 0.0 {
                 return Err(Error::DivisionByZero);
             }
