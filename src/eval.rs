@@ -140,6 +140,7 @@ impl JsonPath {
             vars: T::null(),
             array: T::null(),
             mode: self.mode,
+            first: false,
         }
         .eval_expr_or_predicate(&self.expr)
     }
@@ -159,22 +160,55 @@ impl JsonPath {
             vars,
             array: T::null(),
             mode: self.mode,
+            first: false,
         }
         .eval_expr_or_predicate(&self.expr)
     }
 
+    /// Evaluate the JSON path against the given JSON value.
+    pub fn query_first<'a, T: JsonRef<'a>>(&self, value: T) -> Result<Option<Cow<'a, T::Owned>>> {
+        Evaluator {
+            root: value,
+            current: value,
+            vars: T::null(),
+            array: T::null(),
+            mode: self.mode,
+            first: true,
+        }
+        .eval_expr_or_predicate(&self.expr)
+        .map(|set| set.into_iter().next())
+    }
+
+    /// Evaluate the JSON path against the given JSON value with variables.
+    pub fn query_first_with_vars<'a, T: JsonRef<'a>>(
+        &self,
+        value: T,
+        vars: T,
+    ) -> Result<Option<Cow<'a, T::Owned>>> {
+        if !vars.is_object() {
+            return Err(Error::VarsNotObject);
+        }
+        Evaluator {
+            root: value,
+            current: value,
+            vars,
+            array: T::null(),
+            mode: self.mode,
+            first: true,
+        }
+        .eval_expr_or_predicate(&self.expr)
+        .map(|set| set.into_iter().next())
+    }
+
     /// Checks whether the JSON path returns any item for the specified JSON value.
     pub fn exists<'a, T: JsonRef<'a>>(&self, value: T) -> Result<bool> {
-        // TODO: only checking existence can be more efficient
-        self.query::<T>(value).map(|v| !v.is_empty())
+        self.query_first(value).map(|v| v.is_some())
     }
 
     /// Checks whether the JSON path returns any item for the specified JSON value,
     /// with variables.
     pub fn exists_with_vars<'a, T: JsonRef<'a>>(&self, value: T, vars: T) -> Result<bool> {
-        // TODO: only checking existence can be more efficient
-        self.query_with_vars::<T>(value, vars)
-            .map(|v| !v.is_empty())
+        self.query_first_with_vars(value, vars).map(|v| v.is_some())
     }
 }
 
@@ -192,6 +226,8 @@ struct Evaluator<'a, T: Json + 'a> {
     /// The path mode.
     /// If the query is in lax mode, then errors are ignored and the result is empty or unknown.
     mode: Mode,
+    /// Only return the first result.
+    first: bool,
 }
 
 /// Unwrap the result or return an empty result if the evaluator is in lax mode.
@@ -247,6 +283,21 @@ impl<'a, T: Json> Evaluator<'a, T> {
             vars: T::borrow(self.vars),
             array: T::borrow(self.array),
             mode: self.mode,
+            first: self.first,
+        }
+    }
+
+    fn all(&self) -> Self {
+        Evaluator {
+            first: false,
+            ..*self
+        }
+    }
+
+    fn first(&self) -> Self {
+        Evaluator {
+            first: true,
+            ..*self
         }
     }
 
@@ -274,52 +325,33 @@ impl<'a, T: Json> Evaluator<'a, T> {
     fn eval_predicate(&self, pred: &Predicate) -> Result<Truth> {
         match pred {
             Predicate::Compare(op, left, right) => {
-                let Ok(left) = self.eval_expr(left) else {
+                let Ok(left) = self.all().eval_expr(left) else {
                     return Ok(Truth::Unknown);
                 };
-                let Ok(right) = self.eval_expr(right) else {
+                let Ok(right) = self.all().eval_expr(right) else {
                     return Ok(Truth::Unknown);
                 };
 
-                let mut any_unknown = false;
-                let mut any_true = false;
+                let mut result = Truth::False;
                 // The cross product of these SQL/JSON sequences is formed.
                 // Each SQL/JSON item in one SQL/JSON sequence is compared to each item in the other SQL/JSON sequence.
-                for l in left.iter() {
+                'product: for l in left.iter() {
                     for r in right.iter() {
                         let res = eval_compare::<T>(*op, l.as_ref(), r.as_ref());
+                        result = result.or(res);
                         // The predicate is Unknown if there any pair of SQL/JSON items in the cross product is not comparable.
-                        if res.is_unknown() {
-                            // In lax mode, the path engine is permitted to stop evaluation early if it detects either an error or a success.
-                            if self.is_lax() {
-                                return Ok(Truth::Unknown);
-                            }
-                            any_unknown = true;
-                        }
                         // the predicate is True if any pair is comparable and satisfies the comparison operator.
-                        if res.is_true() {
+                        if res.is_unknown() || res.is_true() && self.is_lax() {
                             // In lax mode, the path engine is permitted to stop evaluation early if it detects either an error or a success.
-                            if self.is_lax() {
-                                return Ok(Truth::True);
-                            }
-                            any_true = true;
+                            break 'product;
                         }
                         // In strict mode, the path engine must test all comparisons in the cross product.
                     }
                 }
-                Ok(if any_unknown {
-                    // The predicate is Unknown if there any pair of SQL/JSON items in the cross product is not comparable.
-                    Truth::Unknown
-                } else if any_true {
-                    // the predicate is True if any pair is comparable and satisfies the comparison operator.
-                    Truth::True
-                } else {
-                    // In all other cases, the predicate is False.
-                    Truth::False
-                })
+                Ok(result)
             }
             Predicate::Exists(expr) => {
-                let Ok(set) = self.eval_expr(expr) else {
+                let Ok(set) = self.first().eval_expr(expr) else {
                     // If the result of the path expression is an error, then result is Unknown.
                     return Ok(Truth::Unknown);
                 };
@@ -353,9 +385,12 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 let prefix = prefix.as_ref().as_str().unwrap();
                 let mut result = Truth::False;
                 for v in set {
-                    let res = v.as_ref().as_str().map_or(false, |s| s.starts_with(prefix));
-                    result = result.or(res.into());
-                    if result.is_true() {
+                    let res = match v.as_ref().as_str() {
+                        Some(s) => s.starts_with(prefix).into(),
+                        None => Truth::Unknown,
+                    };
+                    result = result.or(res);
+                    if result.is_unknown() || result.is_true() && self.is_lax() {
                         break;
                     }
                 }
@@ -367,9 +402,12 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 };
                 let mut result = Truth::False;
                 for v in set {
-                    let res = v.as_ref().as_str().map_or(false, |s| regex.is_match(s));
-                    result = result.or(res.into());
-                    if result.is_true() {
+                    let res = match v.as_ref().as_str() {
+                        Some(s) => regex.is_match(s).into(),
+                        None => Truth::Unknown,
+                    };
+                    result = result.or(res);
+                    if result.is_unknown() || result.is_true() && self.is_lax() {
                         break;
                     }
                 }
@@ -454,10 +492,14 @@ impl<'a, T: Json> Evaluator<'a, T> {
         match op {
             AccessorOp::MemberWildcard => {
                 let object = lax!(self, self.current.as_object(), Error::MemberAccess);
+                // TODO: optimize first
                 Ok(object.list_value().into_iter().map(Cow::Borrowed).collect())
             }
             AccessorOp::ElementWildcard => {
                 let array = lax!(self, self.current.as_array(), Error::ArrayAccess);
+                if self.first {
+                    return Ok(array.get(0).map(Cow::Borrowed).into_iter().collect());
+                }
                 Ok(array.list().into_iter().map(Cow::Borrowed).collect())
             }
             AccessorOp::Member(name) => {
