@@ -225,8 +225,16 @@ impl Display for Mode {
 impl Display for ExprOrPredicate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Expr(expr) => write!(f, "{}", expr),
-            Self::Pred(pred) => write!(f, "{}", pred),
+            Self::Expr(expr) => match expr {
+                Expr::BinaryOp(_, _, _) => write!(f, "({})", expr),
+                _ => write!(f, "{}", expr),
+            },
+            Self::Pred(pred) => match pred {
+                Predicate::Compare(_, _, _) | Predicate::And(_, _) | Predicate::Or(_, _) => {
+                    write!(f, "({})", pred)
+                }
+                _ => write!(f, "{}", pred),
+            },
         }
     }
 }
@@ -234,19 +242,29 @@ impl Display for ExprOrPredicate {
 impl Display for Predicate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Compare(op, left, right) => write!(f, "({left} {op} {right})"),
-            Self::Exists(expr) => write!(f, "exists({expr})"),
-            Self::And(left, right) => write!(f, "({left} && {right})"),
-            Self::Or(left, right) => write!(f, "({left} || {right})"),
-            Self::Not(expr) => write!(f, "!({expr})"),
-            Self::IsUnknown(expr) => write!(f, "{expr} is unknown"),
-            Self::StartsWith(expr, v) => write!(f, "({expr} starts with {v})"),
-            Self::LikeRegex(expr, regex) => {
-                write!(f, "({expr} like_regex {}", regex.pattern())?;
-                if let Some(flags) = regex.flags() {
-                    write!(f, " flag {flags}")?;
+            Self::Compare(op, left, right) => write!(f, "{left} {op} {right}"),
+            Self::Exists(expr) => write!(f, "exists ({expr})"),
+            Self::And(left, right) => {
+                match left.as_ref() {
+                    Self::Or(_, _) => write!(f, "({left})")?,
+                    _ => write!(f, "{left}")?,
                 }
-                write!(f, ")")
+                write!(f, " && ")?;
+                match right.as_ref() {
+                    Self::Or(_, _) => write!(f, "({right})"),
+                    _ => write!(f, "{right}"),
+                }
+            }
+            Self::Or(left, right) => write!(f, "{left} || {right}"),
+            Self::Not(expr) => write!(f, "!({expr})"),
+            Self::IsUnknown(expr) => write!(f, "({expr}) is unknown"),
+            Self::StartsWith(expr, v) => write!(f, "{expr} starts with {v}"),
+            Self::LikeRegex(expr, regex) => {
+                write!(f, "{expr} like_regex \"{}\"", regex.pattern())?;
+                if let Some(flags) = regex.flags() {
+                    write!(f, " flag \"{flags}\"")?;
+                }
+                Ok(())
             }
         }
     }
@@ -256,14 +274,26 @@ impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Accessor(primary, ops) => {
-                write!(f, "{primary}")?;
+                match primary {
+                    PathPrimary::Value(Value::Number(_)) if !ops.is_empty() => {
+                        write!(f, "({primary})")?
+                    }
+                    PathPrimary::ExprOrPred(expr) => match expr.as_ref() {
+                        ExprOrPredicate::Expr(Expr::UnaryOp(_, _)) => write!(f, "({primary})")?,
+                        _ => write!(f, "{primary}")?,
+                    },
+                    _ => write!(f, "{primary}")?,
+                }
                 for op in ops {
                     write!(f, "{op}")?;
                 }
                 Ok(())
             }
-            Expr::UnaryOp(op, expr) => write!(f, "{op}{expr}"),
-            Expr::BinaryOp(op, left, right) => write!(f, "({left} {op} {right})"),
+            Expr::UnaryOp(op, expr) => match expr.as_ref() {
+                Expr::Accessor(_, _) => write!(f, "{op}{expr}"),
+                _ => write!(f, "{op}({expr})"),
+            },
+            Expr::BinaryOp(op, left, right) => write!(f, "{left} {op} {right}"),
         }
     }
 }
@@ -284,7 +314,7 @@ impl Display for PathPrimary {
             Self::Current => write!(f, "@"),
             Self::Value(v) => write!(f, "{v}"),
             Self::Last => write!(f, "last"),
-            Self::ExprOrPred(expr) => write!(f, "({expr})"),
+            Self::ExprOrPred(expr) => write!(f, "{expr}"),
         }
     }
 }
@@ -318,7 +348,7 @@ impl Display for Value {
             Self::Boolean(v) => write!(f, "{v}"),
             Self::Number(v) => write!(f, "{v}"),
             Self::String(v) => write!(f, "\"{v}\""),
-            Self::Variable(v) => write!(f, "${v}"),
+            Self::Variable(v) => write!(f, "$\"{v}\""),
         }
     }
 }
@@ -375,7 +405,7 @@ impl Display for Method {
 #[derive(Debug, Clone)]
 pub struct Regex {
     regex: regex::Regex,
-    flags: Option<String>,
+    flags: String,
 }
 
 impl Regex {
@@ -384,19 +414,43 @@ impl Regex {
             Some(flags) if flags.contains('q') => regex::RegexBuilder::new(&regex::escape(pattern)),
             _ => regex::RegexBuilder::new(pattern),
         };
+        let mut out_flags = String::new();
         if let Some(flags) = flags.as_deref() {
-            if flags.contains('i') {
-                builder.case_insensitive(true);
-            }
-            if flags.contains('m') {
-                builder.multi_line(true);
-            }
-            if flags.contains('s') {
-                builder.dot_matches_new_line(true);
+            for c in flags.chars() {
+                match c {
+                    'q' => {}
+                    'i' => {
+                        builder.case_insensitive(true);
+                    }
+                    'm' => {
+                        builder.multi_line(true);
+                    }
+                    's' => {
+                        builder.dot_matches_new_line(true);
+                    }
+                    'x' => {
+                        return Err(regex::Error::Syntax(
+                            "XQuery \"x\" flag (expanded regular expressions) is not implemented"
+                                .to_string(),
+                        ))
+                    }
+                    _ => {
+                        return Err(regex::Error::Syntax(format!(
+                            "Unrecognized flag character \"{c}\" in LIKE_REGEX predicate."
+                        )))
+                    }
+                };
+                // Remove duplicated flags.
+                if !out_flags.contains(c) {
+                    out_flags.push(c);
+                }
             }
         }
         let regex = builder.build()?;
-        Ok(Self { regex, flags })
+        Ok(Self {
+            regex,
+            flags: out_flags,
+        })
     }
 
     pub fn pattern(&self) -> &str {
@@ -404,7 +458,11 @@ impl Regex {
     }
 
     pub fn flags(&self) -> Option<&str> {
-        self.flags.as_deref()
+        if self.flags.is_empty() {
+            None
+        } else {
+            Some(&self.flags)
+        }
     }
 }
 

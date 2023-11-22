@@ -696,7 +696,7 @@ fn compare_ord<T: Ord>(op: CompareOp, left: T, right: T) -> bool {
 }
 
 /// Extension methods for `Number`.
-trait NumberExt: Sized {
+pub trait NumberExt: Sized {
     fn equal(&self, other: &Self) -> bool;
     fn less_than(&self, other: &Self) -> bool;
     fn neg(&self) -> Self;

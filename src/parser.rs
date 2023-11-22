@@ -14,17 +14,17 @@
 
 //! JSON Path parser written in [nom].
 
-use crate::ast::*;
+use crate::{ast::*, eval::NumberExt};
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_while, take_while1},
     character::complete::{char, multispace0 as s},
-    combinator::{cut, map, map_opt, opt, value, verify},
+    combinator::{cut, map, opt, value, verify},
     error::context,
     multi::{fold_many0, many0, separated_list1},
     number::complete::double,
     sequence::{delimited, pair, preceded, separated_pair, tuple},
-    Finish, IResult, Offset,
+    Err, Finish, IResult, Offset,
 };
 use serde_json::Number;
 use std::str::FromStr;
@@ -153,23 +153,27 @@ fn predicate2(input: &str) -> IResult<&str, Predicate> {
             ),
             |(expr, literal)| Predicate::StartsWith(Box::new(expr), literal),
         ),
-        map_opt(
-            pair(
-                separated_pair(expr, tuple((s, tag_no_case("like_regex"), s)), string),
-                opt(preceded(tuple((s, tag_no_case("flag"), s)), string)),
-            ),
-            |((expr, pattern), flags)| {
-                Some(Predicate::LikeRegex(
-                    Box::new(expr),
-                    Box::new(Regex::with_flags(&pattern, flags).ok()?),
-                ))
-            },
-        ),
+        like_regex,
         map(preceded(pair(tag("!"), s), delimited_predicate), |p| {
             Predicate::Not(Box::new(p))
         }),
         delimited_predicate,
     ))(input)
+}
+
+fn like_regex(input: &str) -> IResult<&str, Predicate> {
+    let (rest, ((expr, pattern), flags)) = pair(
+        separated_pair(expr, tuple((s, tag_no_case("like_regex"), s)), string),
+        opt(preceded(tuple((s, tag_no_case("flag"), s)), string)),
+    )(input)?;
+    let regex = Regex::with_flags(&pattern, flags).map_err(|_| {
+        Err::Failure(nom::error::Error::new(
+            input,
+            // FIXME: should return a custom error
+            nom::error::ErrorKind::RegexpMatch,
+        ))
+    })?;
+    Ok((rest, Predicate::LikeRegex(Box::new(expr), Box::new(regex))))
 }
 
 fn delimited_predicate(input: &str) -> IResult<&str, Predicate> {
@@ -222,11 +226,17 @@ fn expr2(input: &str) -> IResult<&str, Expr> {
     alt((
         accessor_expr,
         delimited(pair(char('('), s), expr, pair(s, char(')'))),
-        map(preceded(pair(char('+'), s), expr), |expr| {
-            Expr::UnaryOp(UnaryOp::Plus, Box::new(expr))
+        map(preceded(pair(char('+'), s), expr2), |expr| match &expr {
+            // constant folding
+            Expr::Accessor(PathPrimary::Value(Value::Number(_)), ops) if ops.is_empty() => expr,
+            _ => Expr::UnaryOp(UnaryOp::Plus, Box::new(expr)),
         }),
-        map(preceded(pair(char('-'), s), expr), |expr| {
-            Expr::UnaryOp(UnaryOp::Minus, Box::new(expr))
+        map(preceded(pair(char('-'), s), expr2), |expr| match &expr {
+            // constant folding
+            Expr::Accessor(PathPrimary::Value(Value::Number(n)), ops) if ops.is_empty() => {
+                Expr::Accessor(PathPrimary::Value(Value::Number(n.neg())), vec![])
+            }
+            _ => Expr::UnaryOp(UnaryOp::Minus, Box::new(expr)),
         }),
     ))(input)
 }
@@ -234,7 +244,15 @@ fn expr2(input: &str) -> IResult<&str, Expr> {
 fn accessor_expr(input: &str) -> IResult<&str, Expr> {
     map(
         pair(path_primary, many0(preceded(s, accessor_op))),
-        |(primary, ops)| Expr::Accessor(primary, ops),
+        |(primary, ops)| {
+            if let PathPrimary::ExprOrPred(expr) = &primary {
+                if let ExprOrPredicate::Expr(Expr::Accessor(p, o)) = expr.as_ref() {
+                    // Merge the two lists of accessors
+                    return Expr::Accessor(p.clone(), o.clone().into_iter().chain(ops).collect());
+                }
+            }
+            Expr::Accessor(primary, ops)
+        },
     )(input)
 }
 

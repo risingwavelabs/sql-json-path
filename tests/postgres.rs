@@ -24,259 +24,392 @@ use sql_json_path::{EvalError, JsonPath};
 #[test]
 fn parse() {
     #[track_caller]
-    fn test(s: &str) {
+    fn test(s: &str, _display: &str) {
         JsonPath::from_str(s).unwrap();
     }
     #[track_caller]
-    fn test1(s: &str, display: &str) {
+    fn test_match(s: &str, display: &str) {
         let path = JsonPath::from_str(s).unwrap();
         assert_eq!(path.to_string(), display);
     }
     #[track_caller]
-    fn test_err(s: &str) {
+    fn test_err(s: &str, _msg: &str) {
         JsonPath::from_str(s).unwrap_err();
     }
+    #[track_caller]
+    fn test_err_match(s: &str, msg: &str) {
+        let err = JsonPath::from_str(s).unwrap_err().to_string();
+        if !err.contains(msg) {
+            panic!("expected error message {:?}, got {:?}", msg, err);
+        }
+    }
 
-    test_err("");
-    test1("$", "$");
-    test1("strict $", "strict $");
-    test1("lax $", "$");
-    test1("$.a", r#"$."a""#);
-    test1("$.a.v", r#"$."a"."v""#);
-    test1("$.a.*", r#"$."a".*"#);
-    test1("$.*[*]", r#"$.*[*]"#);
-    test1("$.a[*]", r#"$."a"[*]"#);
-    test1("$.a[*][*]", r#"$."a"[*][*]"#);
-    test1("$[*]", "$[*]");
-    test1("$[0]", "$[0]");
-    test1("$[*][0]", "$[*][0]");
-    test1("$[*].a", r#"$[*]."a""#);
-    test1("$[*][0].a.b", r#"$[*][0]."a"."b""#);
-    // FIXME: `**` is not supported
-    // test("$.a.**.b");
-    // test("$.a.**{2}.b");
-    // test("$.a.**{2 to 2}.b");
-    // test("$.a.**{2 to 5}.b");
-    // test("$.a.**{0 to 5}.b");
-    // test("$.a.**{5 to last}.b");
-    // test("$.a.**{last}.b");
-    // test("$.a.**{last to 5}.b");
-    test1("$+1", "($ + 1)");
-    test1("$-1", "($ - 1)");
-    test1("$--+1", "($ - -1)");
-    // test1("$.a/+-1", r#"($."a" / -1)"#);
-    // test1("1 * 2 + 4 % -3 != false", "(1 * 2 + 4 % -3 != false)");
-
-    // test(r#""\b\f\r\n\t\v\"\''\\""#);
-    // test(r#""\x50\u0067\u{53}\u{051}\u{00004C}""#);
-    // test(r#"$.foo\x50\u0067\u{53}\u{051}\u{00004C}\t\"bar"#);
-    // test(r#""\z""#); // unrecognized escape is just the literal char
-
-    test(r#"$.g ? ($.a == 1)"#);
-    test(r#"$.g ? (@ == 1)"#);
-    test(r#"$.g ? (@.a == 1)"#);
-    test(r#"$.g ? (@.a == 1 || @.a == 4)"#);
-    test(r#"$.g ? (@.a == 1 && @.a == 4)"#);
-    test(r#"$.g ? (@.a == 1 || @.a == 4 && @.b == 7)"#);
-    test(r#"$.g ? (@.a == 1 || !(@.a == 4) && @.b == 7)"#);
-    test(r#"$.g ? (@.a == 1 || !(@.x >= 123 || @.a == 4) && @.b == 7)"#);
-    test(r#"$.g ? (@.x >= @[*]?(@.a > "abc"))"#);
-    test(r#"$.g ? ((@.x >= 123 || @.a == 4) is unknown)"#);
-    test(r#"$.g ? (exists (@.x))"#);
-    test(r#"$.g ? (exists (@.x ? (@ == 14)))"#);
-    test(r#"$.g ? ((@.x >= 123 || @.a == 4) && exists (@.x ? (@ == 14)))"#);
-    test(r#"$.g ? (+@.x >= +-(+@.a + 2))"#);
-
-    test(r#"$a"#);
-    test(r#"$a.b"#);
-    test(r#"$a[*]"#);
-    test(r#"$.g ? (@.zip == $zip)"#);
-    test(r#"$.a[1,2, 3 to 16]"#);
-    test(r#"$.a[$a + 1, ($b[*]) to -($[0] * 2)]"#);
-    test(r#"$.a[$.a.size() - 3]"#);
-    test_err(r#"last"#);
-    test(r#""last""#);
-    test(r#"$.last"#);
-    test_err(r#"$ ? (last > 0)"#);
-    test(r#"$[last]"#);
-    test(r#"$[$[0] ? (last > 0)]"#);
-
-    test(r#"null.type()"#);
-    // test_err(r#"1.type()"#);
-    test(r#"(1).type()"#);
-    test(r#"1.2.type()"#);
-    test(r#""aaa".type()"#);
-    test(r#"true.type()"#);
-    test(r#"$.double().floor().ceiling().abs()"#);
-    test(r#"$.keyvalue().key"#);
-    // test(r#"$.datetime()"#);
-    // test(r#"$.datetime("datetime template")"#);
-
-    test(r#"$ ? (@ starts with "abc")"#);
-    test(r#"$ ? (@ starts with $var)"#);
-
-    // FIXME: should return error: parentheses () not balanced
-    // test_err(r#"$ ? (@ like_regex "(invalid pattern")"#);
-    test(r#"$ ? (@ like_regex "pattern")"#);
-    test(r#"$ ? (@ like_regex "pattern" flag "")"#);
-    test(r#"$ ? (@ like_regex "pattern" flag "i")"#);
-    test(r#"$ ? (@ like_regex "pattern" flag "is")"#);
-    test(r#"$ ? (@ like_regex "pattern" flag "isim")"#);
-    // FIXME: should return error: XQuery "x" flag (expanded regular expressions) is not implemented
-    // test_err(r#"$ ? (@ like_regex "pattern" flag "xsms")"#);
-    test(r#"$ ? (@ like_regex "pattern" flag "q")"#);
-    test(r#"$ ? (@ like_regex "pattern" flag "iq")"#);
-    test(r#"$ ? (@ like_regex "pattern" flag "smixq")"#);
-    // FIXME: should return error: Unrecognized flag character "a" in LIKE_REGEX predicate.
-    // test_err(r#"$ ? (@ like_regex "pattern" flag "a")"#);
-
-    test(r#"$ < 1"#);
-    test(r#"($ < 1) || $.a.b <= $x"#);
-    test_err(r#"@ + 1"#);
-
-    test(r#"($).a.b"#);
-    test(r#"($.a.b).c.d"#);
-    test(r#"($.a.b + -$.x.y).c.d"#);
-    test(r#"(-+$.a.b).c.d"#);
-    test(r#"1 + ($.a.b + 2).c.d"#);
-    test(r#"1 + ($.a.b > 2).c.d"#);
-    test(r#"($)"#);
-    test(r#"(($))"#);
-    test(r#"((($ + 1)).a + ((2)).b ? ((((@ > 1)) || (exists(@.c)))))"#);
-
-    test(r#"$ ? (@.a < 1)"#);
-    test(r#"$ ? (@.a < -1)"#);
-    test(r#"$ ? (@.a < +1)"#);
-    test(r#"$ ? (@.a < .1)"#);
-    test(r#"$ ? (@.a < -.1)"#);
-    test(r#"$ ? (@.a < +.1)"#);
-    test(r#"$ ? (@.a < 0.1)"#);
-    test(r#"$ ? (@.a < -0.1)"#);
-    test(r#"$ ? (@.a < +0.1)"#);
-    test(r#"$ ? (@.a < 10.1)"#);
-    test(r#"$ ? (@.a < -10.1)"#);
-    test(r#"$ ? (@.a < +10.1)"#);
-    test(r#"$ ? (@.a < 1e1)"#);
-    test(r#"$ ? (@.a < -1e1)"#);
-    test(r#"$ ? (@.a < +1e1)"#);
-    test(r#"$ ? (@.a < .1e1)"#);
-    test(r#"$ ? (@.a < -.1e1)"#);
-    test(r#"$ ? (@.a < +.1e1)"#);
-    test(r#"$ ? (@.a < 0.1e1)"#);
-    test(r#"$ ? (@.a < -0.1e1)"#);
-    test(r#"$ ? (@.a < +0.1e1)"#);
-    test(r#"$ ? (@.a < 10.1e1)"#);
-    test(r#"$ ? (@.a < -10.1e1)"#);
-    test(r#"$ ? (@.a < +10.1e1)"#);
-    test(r#"$ ? (@.a < 1e-1)"#);
-    test(r#"$ ? (@.a < -1e-1)"#);
-    test(r#"$ ? (@.a < +1e-1)"#);
-    test(r#"$ ? (@.a < .1e-1)"#);
-    test(r#"$ ? (@.a < -.1e-1)"#);
-    test(r#"$ ? (@.a < +.1e-1)"#);
-    test(r#"$ ? (@.a < 0.1e-1)"#);
-    test(r#"$ ? (@.a < -0.1e-1)"#);
-    test(r#"$ ? (@.a < +0.1e-1)"#);
-    test(r#"$ ? (@.a < 10.1e-1)"#);
-    test(r#"$ ? (@.a < -10.1e-1)"#);
-    test(r#"$ ? (@.a < +10.1e-1)"#);
-    test(r#"$ ? (@.a < 1e+1)"#);
-    test(r#"$ ? (@.a < -1e+1)"#);
-    test(r#"$ ? (@.a < +1e+1)"#);
-    test(r#"$ ? (@.a < .1e+1)"#);
-    test(r#"$ ? (@.a < -.1e+1)"#);
-    test(r#"$ ? (@.a < +.1e+1)"#);
-    test(r#"$ ? (@.a < 0.1e+1)"#);
-    test(r#"$ ? (@.a < -0.1e+1)"#);
-    test(r#"$ ? (@.a < +0.1e+1)"#);
-    test(r#"$ ? (@.a < 10.1e+1)"#);
-    test(r#"$ ? (@.a < -10.1e+1)"#);
-    test(r#"$ ? (@.a < +10.1e+1)"#);
+    test_err(r#""#, r#""#);
+    test_match(r#"$"#, r#"$"#);
+    test_match(r#"strict $"#, r#"strict $"#);
+    test_match(r#"lax $"#, r#"$"#);
+    test_match(r#"$.a"#, r#"$."a""#);
+    test_match(r#"$.a.v"#, r#"$."a"."v""#);
+    test_match(r#"$.a.*"#, r#"$."a".*"#);
+    test_match(r#"$.*[*]"#, r#"$.*[*]"#);
+    test_match(r#"$.a[*]"#, r#"$."a"[*]"#);
+    test_match(r#"$.a[*][*]"#, r#"$."a"[*][*]"#);
+    test_match(r#"$[*]"#, r#"$[*]"#);
+    test_match(r#"$[0]"#, r#"$[0]"#);
+    test_match(r#"$[*][0]"#, r#"$[*][0]"#);
+    test_match(r#"$[*].a"#, r#"$[*]."a""#);
+    test_match(r#"$[*][0].a.b"#, r#"$[*][0]."a"."b""#);
+    // test_match(r#"$.a.**.b"#, r#"$."a".**."b""#);
+    // test_match(r#"$.a.**{2}.b"#, r#"$."a".**{2}."b""#);
+    // test_match(r#"$.a.**{2 to 2}.b"#, r#"$."a".**{2}."b""#);
+    // test_match(r#"$.a.**{2 to 5}.b"#, r#"$."a".**{2 to 5}."b""#);
+    // test_match(r#"$.a.**{0 to 5}.b"#, r#"$."a".**{0 to 5}."b""#);
+    // test_match(r#"$.a.**{5 to last}.b"#, r#"$."a".**{5 to last}."b""#);
+    // test_match(r#"$.a.**{last}.b"#, r#"$."a".**{last}."b""#);
+    // test_match(r#"$.a.**{last to 5}.b"#, r#"$."a".**{last to 5}."b""#);
+    test_match(r#"$+1"#, r#"($ + 1)"#);
+    test_match(r#"$-1"#, r#"($ - 1)"#);
+    test_match(r#"$--+1"#, r#"($ - -1)"#);
+    test(r#"$.a/+-1"#, r#"($."a" / -1)"#);
+    test_match(r#"1 * 2 + 4 % -3 != false"#, r#"(1 * 2 + 4 % -3 != false)"#);
+    // test_match(r#""\b\f\r\n\t\v\"\''\\""#, r#""\b\f\r\n\t\u000b\"'\\""#);
+    // test_match(r#""\x50\u0067\u{53}\u{051}\u{00004C}""#, r#""PgSQL""#);
+    // test_match(
+    //     r#"$.foo\x50\u0067\u{53}\u{051}\u{00004C}\t\"bar"#,
+    //     r#"$."fooPgSQL\t\"bar""#,
+    // );
+    // test_match(r#""\z""#, r#""z""#);
+    test_match(r#"$.g ? ($.a == 1)"#, r#"$."g"?($."a" == 1)"#);
+    test_match(r#"$.g ? (@ == 1)"#, r#"$."g"?(@ == 1)"#);
+    test_match(r#"$.g ? (@.a == 1)"#, r#"$."g"?(@."a" == 1)"#);
+    test_match(
+        r#"$.g ? (@.a == 1 || @.a == 4)"#,
+        r#"$."g"?(@."a" == 1 || @."a" == 4)"#,
+    );
+    test_match(
+        r#"$.g ? (@.a == 1 && @.a == 4)"#,
+        r#"$."g"?(@."a" == 1 && @."a" == 4)"#,
+    );
+    test_match(
+        r#"$.g ? (@.a == 1 || @.a == 4 && @.b == 7)"#,
+        r#"$."g"?(@."a" == 1 || @."a" == 4 && @."b" == 7)"#,
+    );
+    test_match(
+        r#"$.g ? (@.a == 1 || !(@.a == 4) && @.b == 7)"#,
+        r#"$."g"?(@."a" == 1 || !(@."a" == 4) && @."b" == 7)"#,
+    );
+    test_match(
+        r#"$.g ? (@.a == 1 || !(@.x >= 123 || @.a == 4) && @.b == 7)"#,
+        r#"$."g"?(@."a" == 1 || !(@."x" >= 123 || @."a" == 4) && @."b" == 7)"#,
+    );
+    test_match(
+        r#"$.g ? (@.x >= @[*]?(@.a > "abc"))"#,
+        r#"$."g"?(@."x" >= @[*]?(@."a" > "abc"))"#,
+    );
+    test_match(
+        r#"$.g ? ((@.x >= 123 || @.a == 4) is unknown)"#,
+        r#"$."g"?((@."x" >= 123 || @."a" == 4) is unknown)"#,
+    );
+    test_match(r#"$.g ? (exists (@.x))"#, r#"$."g"?(exists (@."x"))"#);
+    test_match(
+        r#"$.g ? (exists (@.x ? (@ == 14)))"#,
+        r#"$."g"?(exists (@."x"?(@ == 14)))"#,
+    );
+    test_match(
+        r#"$.g ? ((@.x >= 123 || @.a == 4) && exists (@.x ? (@ == 14)))"#,
+        r#"$."g"?((@."x" >= 123 || @."a" == 4) && exists (@."x"?(@ == 14)))"#,
+    );
+    test_match(
+        r#"$.g ? (+@.x >= +-(+@.a + 2))"#,
+        r#"$."g"?(+@."x" >= +(-(+@."a" + 2)))"#,
+    );
+    test_match(r#"$a"#, r#"$"a""#);
+    test_match(r#"$a.b"#, r#"$"a"."b""#);
+    test_match(r#"$a[*]"#, r#"$"a"[*]"#);
+    test_match(r#"$.g ? (@.zip == $zip)"#, r#"$."g"?(@."zip" == $"zip")"#);
+    test_match(r#"$.a[1,2, 3 to 16]"#, r#"$."a"[1,2,3 to 16]"#);
+    test_match(
+        r#"$.a[$a + 1, ($b[*]) to -($[0] * 2)]"#,
+        r#"$."a"[$"a" + 1,$"b"[*] to -($[0] * 2)]"#,
+    );
+    test_match(r#"$.a[$.a.size() - 3]"#, r#"$."a"[$."a".size() - 3]"#);
+    test_err_match(r#"last"#, r#"LAST is allowed only in array subscripts"#);
+    test_match(r#""last""#, r#""last""#);
+    test_match(r#"$.last"#, r#"$."last""#);
+    test_err_match(
+        r#"$ ? (last > 0)"#,
+        r#"LAST is allowed only in array subscripts"#,
+    );
+    test_match(r#"$[last]"#, r#"$[last]"#);
+    test_match(r#"$[$[0] ? (last > 0)]"#, r#"$[$[0]?(last > 0)]"#);
+    test_match(r#"null.type()"#, r#"null.type()"#);
+    // test_err(
+    //     r#"1.type()"#,
+    //     r#"trailing junk after numeric literal at or near "1.t" of jsonpath input"#,
+    // );
+    test_match(r#"(1).type()"#, r#"(1).type()"#);
+    test_match(r#"1.2.type()"#, r#"(1.2).type()"#);
+    test_match(r#""aaa".type()"#, r#""aaa".type()"#);
+    test_match(r#"true.type()"#, r#"true.type()"#);
+    test_match(
+        r#"$.double().floor().ceiling().abs()"#,
+        r#"$.double().floor().ceiling().abs()"#,
+    );
+    test_match(r#"$.keyvalue().key"#, r#"$.keyvalue()."key""#);
+    // test_match(r#"$.datetime()"#, r#"$.datetime()"#);
+    // test_match(
+    //     r#"$.datetime("datetime template")"#,
+    //     r#"$.datetime("datetime template")"#,
+    // );
+    test_match(r#"$ ? (@ starts with "abc")"#, r#"$?(@ starts with "abc")"#);
+    test_match(r#"$ ? (@ starts with $var)"#, r#"$?(@ starts with $"var")"#);
+    test_err(
+        r#"$ ? (@ like_regex "(invalid pattern")"#,
+        r#"invalid regular expression: parentheses () not balanced"#,
+    );
+    test_match(
+        r#"$ ? (@ like_regex "pattern")"#,
+        r#"$?(@ like_regex "pattern")"#,
+    );
+    test_match(
+        r#"$ ? (@ like_regex "pattern" flag "")"#,
+        r#"$?(@ like_regex "pattern")"#,
+    );
+    test_match(
+        r#"$ ? (@ like_regex "pattern" flag "i")"#,
+        r#"$?(@ like_regex "pattern" flag "i")"#,
+    );
+    test_match(
+        r#"$ ? (@ like_regex "pattern" flag "is")"#,
+        r#"$?(@ like_regex "pattern" flag "is")"#,
+    );
+    test_match(
+        r#"$ ? (@ like_regex "pattern" flag "isim")"#,
+        r#"$?(@ like_regex "pattern" flag "ism")"#,
+    );
+    test_err(
+        r#"$ ? (@ like_regex "pattern" flag "xsms")"#,
+        r#"XQuery "x" flag (expanded regular expressions) is not implemented"#,
+    );
+    test_match(
+        r#"$ ? (@ like_regex "pattern" flag "q")"#,
+        r#"$?(@ like_regex "pattern" flag "q")"#,
+    );
+    test_match(
+        r#"$ ? (@ like_regex "pattern" flag "iq")"#,
+        r#"$?(@ like_regex "pattern" flag "iq")"#,
+    );
+    // test_match(
+    //     r#"$ ? (@ like_regex "pattern" flag "smixq")"#,
+    //     r#"$?(@ like_regex "pattern" flag "ismxq")"#,
+    // );
+    test_err(
+        r#"$ ? (@ like_regex "pattern" flag "a")"#,
+        r#"Unrecognized flag character "a" in LIKE_REGEX predicate."#,
+    );
+    test_match(r#"$ < 1"#, r#"($ < 1)"#);
+    test_match(
+        r#"($ < 1) || $.a.b <= $x"#,
+        r#"($ < 1 || $."a"."b" <= $"x")"#,
+    );
+    test_err(r#"@ + 1"#, r#"@ is not allowed in root expressions"#);
+    test_match(r#"($).a.b"#, r#"$."a"."b""#);
+    test_match(r#"($.a.b).c.d"#, r#"$."a"."b"."c"."d""#);
+    test_match(
+        r#"($.a.b + -$.x.y).c.d"#,
+        r#"($."a"."b" + -$."x"."y")."c"."d""#,
+    );
+    test_match(r#"(-+$.a.b).c.d"#, r#"(-(+$."a"."b"))."c"."d""#);
+    test_match(r#"1 + ($.a.b + 2).c.d"#, r#"(1 + ($."a"."b" + 2)."c"."d")"#);
+    test_match(r#"1 + ($.a.b > 2).c.d"#, r#"(1 + ($."a"."b" > 2)."c"."d")"#);
+    test_match(r#"($)"#, r#"$"#);
+    test_match(r#"(($))"#, r#"$"#);
+    test_match(
+        r#"((($ + 1)).a + ((2)).b ? ((((@ > 1)) || (exists(@.c)))))"#,
+        r#"(($ + 1)."a" + (2)."b"?(@ > 1 || exists (@."c")))"#,
+    );
+    test_match(r#"$ ? (@.a < 1)"#, r#"$?(@."a" < 1)"#);
+    test_match(r#"$ ? (@.a < -1)"#, r#"$?(@."a" < -1)"#);
+    test_match(r#"$ ? (@.a < +1)"#, r#"$?(@."a" < 1)"#);
+    test_match(r#"$ ? (@.a < .1)"#, r#"$?(@."a" < 0.1)"#);
+    test_match(r#"$ ? (@.a < -.1)"#, r#"$?(@."a" < -0.1)"#);
+    test_match(r#"$ ? (@.a < +.1)"#, r#"$?(@."a" < 0.1)"#);
+    test_match(r#"$ ? (@.a < 0.1)"#, r#"$?(@."a" < 0.1)"#);
+    test_match(r#"$ ? (@.a < -0.1)"#, r#"$?(@."a" < -0.1)"#);
+    test_match(r#"$ ? (@.a < +0.1)"#, r#"$?(@."a" < 0.1)"#);
+    test_match(r#"$ ? (@.a < 10.1)"#, r#"$?(@."a" < 10.1)"#);
+    test_match(r#"$ ? (@.a < -10.1)"#, r#"$?(@."a" < -10.1)"#);
+    test_match(r#"$ ? (@.a < +10.1)"#, r#"$?(@."a" < 10.1)"#);
+    test_match(r#"$ ? (@.a < 1e1)"#, r#"$?(@."a" < 10)"#);
+    test_match(r#"$ ? (@.a < -1e1)"#, r#"$?(@."a" < -10)"#);
+    test_match(r#"$ ? (@.a < +1e1)"#, r#"$?(@."a" < 10)"#);
+    test_match(r#"$ ? (@.a < .1e1)"#, r#"$?(@."a" < 1)"#);
+    test_match(r#"$ ? (@.a < -.1e1)"#, r#"$?(@."a" < -1)"#);
+    test_match(r#"$ ? (@.a < +.1e1)"#, r#"$?(@."a" < 1)"#);
+    test_match(r#"$ ? (@.a < 0.1e1)"#, r#"$?(@."a" < 1)"#);
+    test_match(r#"$ ? (@.a < -0.1e1)"#, r#"$?(@."a" < -1)"#);
+    test_match(r#"$ ? (@.a < +0.1e1)"#, r#"$?(@."a" < 1)"#);
+    test_match(r#"$ ? (@.a < 10.1e1)"#, r#"$?(@."a" < 101)"#);
+    test_match(r#"$ ? (@.a < -10.1e1)"#, r#"$?(@."a" < -101)"#);
+    test_match(r#"$ ? (@.a < +10.1e1)"#, r#"$?(@."a" < 101)"#);
+    test_match(r#"$ ? (@.a < 1e-1)"#, r#"$?(@."a" < 0.1)"#);
+    test_match(r#"$ ? (@.a < -1e-1)"#, r#"$?(@."a" < -0.1)"#);
+    test_match(r#"$ ? (@.a < +1e-1)"#, r#"$?(@."a" < 0.1)"#);
+    test_match(r#"$ ? (@.a < .1e-1)"#, r#"$?(@."a" < 0.01)"#);
+    test_match(r#"$ ? (@.a < -.1e-1)"#, r#"$?(@."a" < -0.01)"#);
+    test_match(r#"$ ? (@.a < +.1e-1)"#, r#"$?(@."a" < 0.01)"#);
+    test_match(r#"$ ? (@.a < 0.1e-1)"#, r#"$?(@."a" < 0.01)"#);
+    test_match(r#"$ ? (@.a < -0.1e-1)"#, r#"$?(@."a" < -0.01)"#);
+    test_match(r#"$ ? (@.a < +0.1e-1)"#, r#"$?(@."a" < 0.01)"#);
+    test_match(r#"$ ? (@.a < 10.1e-1)"#, r#"$?(@."a" < 1.01)"#);
+    test_match(r#"$ ? (@.a < -10.1e-1)"#, r#"$?(@."a" < -1.01)"#);
+    test_match(r#"$ ? (@.a < +10.1e-1)"#, r#"$?(@."a" < 1.01)"#);
+    test_match(r#"$ ? (@.a < 1e+1)"#, r#"$?(@."a" < 10)"#);
+    test_match(r#"$ ? (@.a < -1e+1)"#, r#"$?(@."a" < -10)"#);
+    test_match(r#"$ ? (@.a < +1e+1)"#, r#"$?(@."a" < 10)"#);
+    test_match(r#"$ ? (@.a < .1e+1)"#, r#"$?(@."a" < 1)"#);
+    test_match(r#"$ ? (@.a < -.1e+1)"#, r#"$?(@."a" < -1)"#);
+    test_match(r#"$ ? (@.a < +.1e+1)"#, r#"$?(@."a" < 1)"#);
+    test_match(r#"$ ? (@.a < 0.1e+1)"#, r#"$?(@."a" < 1)"#);
+    test_match(r#"$ ? (@.a < -0.1e+1)"#, r#"$?(@."a" < -1)"#);
+    test_match(r#"$ ? (@.a < +0.1e+1)"#, r#"$?(@."a" < 1)"#);
+    test_match(r#"$ ? (@.a < 10.1e+1)"#, r#"$?(@."a" < 101)"#);
+    test_match(r#"$ ? (@.a < -10.1e+1)"#, r#"$?(@."a" < -101)"#);
+    test_match(r#"$ ? (@.a < +10.1e+1)"#, r#"$?(@."a" < 101)"#);
 
     // numeric literals
-
-    test(r#"0"#);
-    // test_err(r#"00"#);
-    // test_err(r#"0755"#);
-    test(r#"0.0"#);
-    test(r#"0.000"#);
-    test(r#"0.000e1"#);
-    test(r#"0.000e2"#);
-    test(r#"0.000e3"#);
-    test(r#"0.0010"#);
-    test(r#"0.0010e-1"#);
-    test(r#"0.0010e+1"#);
-    test(r#"0.0010e+2"#);
-    test(r#".001"#);
-    test(r#".001e1"#);
-    test(r#"1."#);
-    test(r#"1.e1"#);
-    test_err(r#"1a"#);
-    test_err(r#"1e"#);
-    test_err(r#"1.e"#);
-    test_err(r#"1.2a"#);
-    test_err(r#"1.2e"#);
-    test(r#"1.2.e"#);
-    test(r#"(1.2).e"#);
-    test(r#"1e3"#);
-    test(r#"1.e3"#);
-    test(r#"1.e3.e"#);
-    test(r#"1.e3.e4"#);
-    test(r#"1.2e3"#);
-    test_err(r#"1.2e3a"#);
-    test(r#"1.2.e3"#);
-    test(r#"(1.2).e3"#);
-    test(r#"1..e"#);
-    test(r#"1..e3"#);
-    test(r#"(1.).e"#);
-    test(r#"(1.).e3"#);
-    test(r#"1?(2>3)"#);
+    test_match(r#"0"#, r#"0"#);
+    // test_err(
+    //     r#"00"#,
+    //     r#"trailing junk after numeric literal at or near "00" of jsonpath input"#,
+    // );
+    // test_err(r#"0755"#, r#"syntax error at end of jsonpath input"#);
+    test(r#"0.0"#, r#"0.0"#);
+    test(r#"0.000"#, r#"0.000"#);
+    test(r#"0.000e1"#, r#"0.00"#);
+    test(r#"0.000e2"#, r#"0.0"#);
+    test(r#"0.000e3"#, r#"0"#);
+    test(r#"0.0010"#, r#"0.0010"#);
+    test(r#"0.0010e-1"#, r#"0.00010"#);
+    test(r#"0.0010e+1"#, r#"0.010"#);
+    test(r#"0.0010e+2"#, r#"0.10"#);
+    test_match(r#".001"#, r#"0.001"#);
+    test_match(r#".001e1"#, r#"0.01"#);
+    test_match(r#"1."#, r#"1"#);
+    test_match(r#"1.e1"#, r#"10"#);
+    test_err(
+        r#"1a"#,
+        r#"trailing junk after numeric literal at or near "1a" of jsonpath input"#,
+    );
+    test_err(
+        r#"1e"#,
+        r#"trailing junk after numeric literal at or near "1e" of jsonpath input"#,
+    );
+    test_err(
+        r#"1.e"#,
+        r#"trailing junk after numeric literal at or near "1.e" of jsonpath input"#,
+    );
+    test_err(
+        r#"1.2a"#,
+        r#"trailing junk after numeric literal at or near "1.2a" of jsonpath input"#,
+    );
+    test_err(
+        r#"1.2e"#,
+        r#"trailing junk after numeric literal at or near "1.2e" of jsonpath input"#,
+    );
+    test_match(r#"1.2.e"#, r#"(1.2)."e""#);
+    test_match(r#"(1.2).e"#, r#"(1.2)."e""#);
+    test_match(r#"1e3"#, r#"1000"#);
+    test_match(r#"1.e3"#, r#"1000"#);
+    test_match(r#"1.e3.e"#, r#"(1000)."e""#);
+    test_match(r#"1.e3.e4"#, r#"(1000)."e4""#);
+    test_match(r#"1.2e3"#, r#"1200"#);
+    test_err(
+        r#"1.2e3a"#,
+        r#"trailing junk after numeric literal at or near "1.2e3a" of jsonpath input"#,
+    );
+    test_match(r#"1.2.e3"#, r#"(1.2)."e3""#);
+    test_match(r#"(1.2).e3"#, r#"(1.2)."e3""#);
+    test_match(r#"1..e"#, r#"(1)."e""#);
+    test_match(r#"1..e3"#, r#"(1)."e3""#);
+    test_match(r#"(1.).e"#, r#"(1)."e""#);
+    test_match(r#"(1.).e3"#, r#"(1)."e3""#);
+    test_match(r#"1?(2>3)"#, r#"(1)?(2 > 3)"#);
 
     // nondecimal
-    // test(r#"0b100101"#);
-    // test(r#"0o273"#);
-    // test(r#"0x42F"#);
+    // test_match(r#"0b100101"#, r#"37"#);
+    // test_match(r#"0o273"#, r#"187"#);
+    // test_match(r#"0x42F"#, r#"1071"#);
 
     // error cases
-    test_err(r#"0b"#);
-    test_err(r#"1b"#);
-    test_err(r#"0b0x"#);
-
-    test_err(r#"0o"#);
-    test_err(r#"1o"#);
-    test_err(r#"0o0x"#);
-
-    test_err(r#"0x"#);
-    test_err(r#"1x"#);
-    test_err(r#"0x0y"#);
+    test_err(
+        r#"0b"#,
+        r#"trailing junk after numeric literal at or near "0b" of jsonpath input"#,
+    );
+    test_err(
+        r#"1b"#,
+        r#"trailing junk after numeric literal at or near "1b" of jsonpath input"#,
+    );
+    test_err(r#"0b0x"#, r#"syntax error at end of jsonpath input"#);
+    test_err(
+        r#"0o"#,
+        r#"trailing junk after numeric literal at or near "0o" of jsonpath input"#,
+    );
+    test_err(
+        r#"1o"#,
+        r#"trailing junk after numeric literal at or near "1o" of jsonpath input"#,
+    );
+    test_err(r#"0o0x"#, r#"syntax error at end of jsonpath input"#);
+    test_err(
+        r#"0x"#,
+        r#"trailing junk after numeric literal at or near "0x" of jsonpath input"#,
+    );
+    test_err(
+        r#"1x"#,
+        r#"trailing junk after numeric literal at or near "1x" of jsonpath input"#,
+    );
+    test_err(r#"0x0y"#, r#"syntax error at end of jsonpath input"#);
 
     // underscores
-    // test(r#"1_000_000"#);
-    // test(r#"1_2_3"#);
-    // test(r#"0x1EEE_FFFF"#);
-    // test(r#"0o2_73"#);
-    // test(r#"0b10_0101"#);
-
-    // test(r#"1_000.000_005"#);
-    // test(r#"1_000."#);
-    // test(r#".000_005"#);
-    // test(r#"1_000.5e0_1"#);
+    // test_match(r#"1_000_000"#, r#"1000000"#);
+    // test_match(r#"1_2_3"#, r#"123"#);
+    // test_match(r#"0x1EEE_FFFF"#, r#"518979583"#);
+    // test_match(r#"0o2_73"#, r#"187"#);
+    // test_match(r#"0b10_0101"#, r#"37"#);
+    // test_match(r#"1_000.000_005"#, r#"1000.000005"#);
+    // test_match(r#"1_000."#, r#"1000"#);
+    // test_match(r#".000_005"#, r#"0.000005"#);
+    // test_match(r#"1_000.5e0_1"#, r#"10005"#);
 
     // error cases
-    test_err(r#"_100"#);
-    test_err(r#"100_"#);
-    test_err(r#"100__000"#);
-
-    test_err(r#"_1_000.5"#);
-    test_err(r#"1_000_.5"#);
-    test_err(r#"1_000._5"#);
-    test_err(r#"1_000.5_"#);
-    test_err(r#"1_000.5e_1"#);
+    test_err(r#"_100"#, r#"syntax error at end of jsonpath input"#);
+    test_err(
+        r#"100_"#,
+        r#"trailing junk after numeric literal at or near "100_" of jsonpath input"#,
+    );
+    test_err(r#"100__000"#, r#"syntax error at end of jsonpath input"#);
+    test_err(r#"_1_000.5"#, r#"syntax error at end of jsonpath input"#);
+    test_err(
+        r#"1_000_.5"#,
+        r#"trailing junk after numeric literal at or near "1_000_" of jsonpath input"#,
+    );
+    test_err(
+        r#"1_000._5"#,
+        r#"trailing junk after numeric literal at or near "1_000._" of jsonpath input"#,
+    );
+    test_err(
+        r#"1_000.5_"#,
+        r#"trailing junk after numeric literal at or near "1_000.5_" of jsonpath input"#,
+    );
+    test_err(
+        r#"1_000.5e_1"#,
+        r#"trailing junk after numeric literal at or near "1_000.5e" of jsonpath input"#,
+    );
 
     // underscore after prefix not allowed in JavaScript (but allowed in SQL)
-    test_err(r#"0b_10_0101"#);
-    test_err(r#"0o_273"#);
-    test_err(r#"0x_42F"#);
+    test_err(r#"0b_10_0101"#, r#"syntax error at end of jsonpath input"#);
+    test_err(r#"0o_273"#, r#"syntax error at end of jsonpath input"#);
+    test_err(r#"0x_42F"#, r#"syntax error at end of jsonpath input"#);
 }
 
 #[test]
