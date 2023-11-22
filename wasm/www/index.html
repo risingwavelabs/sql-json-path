@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL/JSON Path Online Evaluator</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container mt-5">
+        <h1 class="text-center mb-4">SQL/JSON Path Online Evaluator</h1>
+
+        <div class="row mb-3">
+            <div class="col-12">
+                <input type="text" id="jsonpath-query" class="form-control" placeholder="Input JSON Path">
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-6">
+                <textarea id="json-input" class="form-control mb-3" placeholder="Input JSON"
+                    style="height: 300px;"></textarea>
+            </div>
+            <div class="col-md-6">
+                <div id="result" class="form-control" style="height: 300px; overflow: auto;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.10.2/dist/umd/popper.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.min.js"></script>
+    <script type="module" src="script.js"></script>
+</body>
+
+</html>
