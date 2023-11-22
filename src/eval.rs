@@ -121,6 +121,15 @@ impl Truth {
         }
     }
 
+    /// Merge two predicate results.
+    fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Truth::Unknown, _) | (_, Truth::Unknown) => Truth::Unknown,
+            (Truth::True, _) | (_, Truth::True) => Truth::True,
+            (Truth::False, Truth::False) => Truth::False,
+        }
+    }
+
     /// Converts to JSON value.
     fn to_json<T: Json>(self) -> T {
         match self {
@@ -338,7 +347,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 'product: for l in left.iter() {
                     for r in right.iter() {
                         let res = eval_compare::<T>(*op, l.as_ref(), r.as_ref());
-                        result = result.or(res);
+                        result = result.merge(res);
                         // The predicate is Unknown if there any pair of SQL/JSON items in the cross product is not comparable.
                         // the predicate is True if any pair is comparable and satisfies the comparison operator.
                         if res.is_unknown() || res.is_true() && self.is_lax() {
@@ -389,7 +398,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                         Some(s) => s.starts_with(prefix).into(),
                         None => Truth::Unknown,
                     };
-                    result = result.or(res);
+                    result = result.merge(res);
                     if result.is_unknown() || result.is_true() && self.is_lax() {
                         break;
                     }
@@ -406,7 +415,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                         Some(s) => regex.is_match(s).into(),
                         None => Truth::Unknown,
                     };
-                    result = result.or(res);
+                    result = result.merge(res);
                     if result.is_unknown() || result.is_true() && self.is_lax() {
                         break;
                     }
