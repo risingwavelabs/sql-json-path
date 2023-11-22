@@ -419,30 +419,30 @@ impl<'a, T: Json> Evaluator<'a, T> {
     /// Evaluates the expression.
     fn eval_expr(&self, expr: &Expr) -> Result<Vec<Cow<'a, T>>> {
         match expr {
-            Expr::Accessor(primary, ops) => {
-                let mut set = self.eval_path_primary(primary)?;
+            Expr::PathPrimary(primary) => self.eval_path_primary(primary),
+            Expr::Accessor(base, op) => {
+                let set = self.all().eval_expr(base)?;
                 let mut new_set = vec![];
-                for op in ops {
-                    for v in &set {
-                        match v {
-                            Cow::Owned(v) => {
-                                let sset = self.with_current(v.as_ref()).eval_accessor_op(op)?;
-                                new_set.extend(
-                                    // the returned set requires lifetime 'a,
-                                    // however, elements in `sset` only have lifetime 'b < 'v = 'set < 'a
-                                    // therefore, we need to convert them to owned values
-                                    sset.into_iter().map(|cow| Cow::Owned(cow.into_owned())),
-                                )
-                            }
-                            Cow::Borrowed(v) => {
-                                new_set.extend(self.with_current(*v).eval_accessor_op(op)?);
-                            }
+                for v in &set {
+                    match v {
+                        Cow::Owned(v) => {
+                            let sset = self.with_current(v.as_ref()).eval_accessor_op(op)?;
+                            new_set.extend(
+                                // the returned set requires lifetime 'a,
+                                // however, elements in `sset` only have lifetime 'b < 'v = 'set < 'a
+                                // therefore, we need to convert them to owned values
+                                sset.into_iter().map(|cow| Cow::Owned(cow.into_owned())),
+                            )
+                        }
+                        Cow::Borrowed(v) => {
+                            new_set.extend(self.with_current(*v).eval_accessor_op(op)?);
                         }
                     }
-                    std::mem::swap(&mut set, &mut new_set);
-                    new_set.clear();
+                    if self.first && !new_set.is_empty() {
+                        break;
+                    }
                 }
-                Ok(set)
+                Ok(new_set)
             }
             Expr::UnaryOp(op, expr) => {
                 let set = self.eval_expr(expr)?;

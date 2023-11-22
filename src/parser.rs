@@ -228,13 +228,13 @@ fn expr2(input: &str) -> IResult<&str, Expr> {
         delimited(pair(char('('), s), expr, pair(s, char(')'))),
         map(preceded(pair(char('+'), s), expr2), |expr| match &expr {
             // constant folding
-            Expr::Accessor(PathPrimary::Value(Value::Number(_)), ops) if ops.is_empty() => expr,
+            Expr::PathPrimary(PathPrimary::Value(Value::Number(_))) => expr,
             _ => Expr::UnaryOp(UnaryOp::Plus, Box::new(expr)),
         }),
         map(preceded(pair(char('-'), s), expr2), |expr| match &expr {
             // constant folding
-            Expr::Accessor(PathPrimary::Value(Value::Number(n)), ops) if ops.is_empty() => {
-                Expr::Accessor(PathPrimary::Value(Value::Number(n.neg())), vec![])
+            Expr::PathPrimary(PathPrimary::Value(Value::Number(n))) => {
+                Expr::PathPrimary(PathPrimary::Value(Value::Number(n.neg())))
             }
             _ => Expr::UnaryOp(UnaryOp::Minus, Box::new(expr)),
         }),
@@ -245,13 +245,11 @@ fn accessor_expr(input: &str) -> IResult<&str, Expr> {
     map(
         pair(path_primary, many0(preceded(s, accessor_op))),
         |(primary, ops)| {
-            if let PathPrimary::ExprOrPred(expr) = &primary {
-                if let ExprOrPredicate::Expr(Expr::Accessor(p, o)) = expr.as_ref() {
-                    // Merge the two lists of accessors
-                    return Expr::Accessor(p.clone(), o.clone().into_iter().chain(ops).collect());
-                }
+            let mut expr = Expr::PathPrimary(primary.unnest());
+            for op in ops {
+                expr = Expr::Accessor(Box::new(expr), op);
             }
-            Expr::Accessor(primary, ops)
+            expr
         },
     )(input)
 }
@@ -469,11 +467,10 @@ impl Checker {
 
     fn visit_expr(&self, expr: &Expr) -> Result<(), &'static str> {
         match expr {
-            Expr::Accessor(primary, accessors) => {
-                for accessor in accessors {
-                    self.visit_accessor_op(accessor)?;
-                }
-                self.visit_path_primary(primary)
+            Expr::PathPrimary(primary) => self.visit_path_primary(primary),
+            Expr::Accessor(base, accessor) => {
+                self.visit_expr(base)?;
+                self.visit_accessor_op(accessor)
             }
             Expr::UnaryOp(_, expr) => self.visit_expr(expr),
             Expr::BinaryOp(_, left, right) => {

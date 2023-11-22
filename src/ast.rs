@@ -46,8 +46,10 @@ pub enum ExprOrPredicate {
 /// An expression in JSON Path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
+    /// Path primary
+    PathPrimary(PathPrimary),
     /// Accessor expression.
-    Accessor(PathPrimary, Vec<AccessorOp>),
+    Accessor(Box<Expr>, AccessorOp),
     /// Unary operation.
     UnaryOp(UnaryOp, Box<Expr>),
     /// Binary operation.
@@ -204,6 +206,20 @@ pub enum Method {
     Keyvalue,
 }
 
+impl PathPrimary {
+    /// If this is a nested path primary, unnest it.
+    /// `(primary) => primary`
+    pub(crate) fn unnest(self) -> Self {
+        match self {
+            Self::ExprOrPred(expr) => match *expr {
+                ExprOrPredicate::Expr(Expr::PathPrimary(inner)) => inner,
+                other => Self::ExprOrPred(Box::new(other)),
+            },
+            _ => self,
+        }
+    }
+}
+
 impl Display for JsonPath {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.mode == Mode::Strict {
@@ -273,24 +289,23 @@ impl Display for Predicate {
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Accessor(primary, ops) => {
-                match primary {
-                    PathPrimary::Value(Value::Number(_)) if !ops.is_empty() => {
-                        write!(f, "({primary})")?
+            Expr::PathPrimary(primary) => write!(f, "{primary}"),
+            Expr::Accessor(base, op) => {
+                match base.as_ref() {
+                    Expr::PathPrimary(PathPrimary::Value(Value::Number(_))) => {
+                        write!(f, "({base})")?
                     }
-                    PathPrimary::ExprOrPred(expr) => match expr.as_ref() {
-                        ExprOrPredicate::Expr(Expr::UnaryOp(_, _)) => write!(f, "({primary})")?,
-                        _ => write!(f, "{primary}")?,
+                    Expr::PathPrimary(PathPrimary::ExprOrPred(expr)) => match expr.as_ref() {
+                        ExprOrPredicate::Expr(Expr::UnaryOp(_, _)) => write!(f, "({base})")?,
+                        _ => write!(f, "{base}")?,
                     },
-                    _ => write!(f, "{primary}")?,
+                    _ => write!(f, "{base}")?,
                 }
-                for op in ops {
-                    write!(f, "{op}")?;
-                }
+                write!(f, "{op}")?;
                 Ok(())
             }
             Expr::UnaryOp(op, expr) => match expr.as_ref() {
-                Expr::Accessor(_, _) => write!(f, "{op}{expr}"),
+                Expr::PathPrimary(_) | Expr::Accessor(_, _) => write!(f, "{op}{expr}"),
                 _ => write!(f, "{op}({expr})"),
             },
             Expr::BinaryOp(op, left, right) => write!(f, "{left} {op} {right}"),
