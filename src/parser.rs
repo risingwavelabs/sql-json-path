@@ -300,7 +300,7 @@ fn level_range(input: &str) -> IResult<&str, LevelRange> {
         ),
         map(
             delimited(pair(char('{'), s), level, pair(s, char('}'))),
-            |level| LevelRange::One(level),
+            LevelRange::One,
         ),
         value(LevelRange::All, tag("")),
     ))(input)
