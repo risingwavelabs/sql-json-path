@@ -559,7 +559,9 @@ impl<'a, T: Json> Evaluator<'a, T> {
     fn eval_accessor_op(&self, op: &AccessorOp) -> Result<Vec<Cow<'a, T>>> {
         match op {
             AccessorOp::MemberWildcard => self.eval_member_wildcard(),
-            AccessorOp::RecursiveMemberWildcard(_) => todo!("evaluate .**"),
+            AccessorOp::DescendantMemberWildcard(levels) => {
+                self.eval_descendant_member_wildcard(levels)
+            }
             AccessorOp::ElementWildcard => self.eval_element_wildcard(),
             AccessorOp::Member(name) => self.eval_member(name),
             AccessorOp::Element(indices) => self.eval_element_accessor(indices),
@@ -580,6 +582,40 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 new_set.push(Cow::Borrowed(v));
             }
         }
+        Ok(new_set)
+    }
+
+    fn eval_descendant_member_wildcard(&self, levels: &LevelRange) -> Result<Vec<Cow<'a, T>>> {
+        let set = match self.current.as_array() {
+            Some(array) if self.is_lax() => array.list(),
+            _ => vec![self.current],
+        };
+        // expand all levels
+        let mut level_sets = vec![set];
+        for level in 1.. {
+            // early exit if the level is out of range
+            if levels.exceeded(level) {
+                break;
+            }
+            let mut new_set = vec![];
+            for v in level_sets.last().unwrap().iter() {
+                if let Some(object) = v.as_object() {
+                    new_set.extend(object.list_value());
+                }
+            }
+            if new_set.is_empty() {
+                break;
+            }
+            level_sets.push(new_set);
+        }
+        // flatten the level sets in range
+        let last_level = level_sets.len() - 1;
+        let new_set = level_sets[levels.to_range(last_level)]
+            .iter()
+            .flatten()
+            .cloned()
+            .map(Cow::Borrowed)
+            .collect();
         Ok(new_set)
     }
 

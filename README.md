@@ -46,8 +46,8 @@ See [PostgreSQL documentation](https://www.postgresql.org/docs/16/functions-json
 - [x] `.name`: An object member by name
 - [x] `[*]`: Any array element
 - [x] `.*`: Any object member
-- [ ] `.**`: Any descendant object member (Postgres extension)
-- [x] `?(expr)`: Filter expression
+- [x] `.**`: Any descendant object member (Postgres extension)
+- [x] `?(predicate)`: Filter expression
     - [x] `==`, `!=` / `<>`, `<`, `<=`, `>`, `>=`: Comparison
     - [x] `&&`, `||`, `!`: Logical operators
     - [x] `is unknown`: Check if the value is unknown

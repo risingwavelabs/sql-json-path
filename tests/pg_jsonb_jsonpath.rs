@@ -48,7 +48,6 @@ fn parse_script(script: &'static str) -> Vec<Trial> {
         // not supported
         let ignored = sql.contains(".datetime")
             || sql.contains("_tz")
-            || sql.contains("**")
             // invalid serde_json::Value
             || sql.contains("1e1000");
 

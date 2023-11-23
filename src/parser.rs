@@ -271,7 +271,7 @@ fn accessor_op(input: &str) -> IResult<&str, AccessorOp> {
     alt((
         map(
             preceded(tag(".**"), level_range),
-            AccessorOp::RecursiveMemberWildcard,
+            AccessorOp::DescendantMemberWildcard,
         ),
         value(AccessorOp::MemberWildcard, tag(".*")),
         value(AccessorOp::ElementWildcard, element_wildcard),
@@ -543,7 +543,7 @@ impl Checker {
     fn visit_accessor_op(&self, accessor_op: &AccessorOp) -> Result<(), &'static str> {
         match accessor_op {
             AccessorOp::ElementWildcard | AccessorOp::MemberWildcard => Ok(()),
-            AccessorOp::RecursiveMemberWildcard(_) => Ok(()),
+            AccessorOp::DescendantMemberWildcard(_) => Ok(()),
             AccessorOp::Member(_) | AccessorOp::Method(_) => Ok(()),
             AccessorOp::FilterExpr(pred) => Self {
                 non_root: true,

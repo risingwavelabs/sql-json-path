@@ -98,7 +98,7 @@ pub enum AccessorOp {
     /// `.*` represents selecting all elements in an object.
     MemberWildcard,
     /// `.**` represents selecting all elements in an object and its sub-objects.
-    RecursiveMemberWildcard(LevelRange),
+    DescendantMemberWildcard(LevelRange),
     /// `[*]` represents selecting all elements in an array.
     ElementWildcard,
     /// `.<name>` represents selecting element that matched the name in an object, like `$.event`.
@@ -240,6 +240,40 @@ impl PathPrimary {
     }
 }
 
+impl LevelRange {
+    /// Returns true if the given level is exceeded by this range.
+    pub(crate) fn exceeded(&self, level: u32) -> bool {
+        match self {
+            Self::All => false,
+            Self::One(Level::N(n)) => level > *n,
+            Self::Range(_, Level::N(end)) => level > *end,
+            _ => false,
+        }
+    }
+
+    /// Resolve the range.
+    pub(crate) fn to_range(&self, last: usize) -> std::ops::Range<usize> {
+        match self {
+            Self::All => 0..last + 1,
+            Self::One(level) => {
+                level.to_usize(last).min(last + 1)..level.to_usize(last).min(last) + 1
+            }
+            Self::Range(start, end) => {
+                start.to_usize(last).min(last + 1)..end.to_usize(last).min(last) + 1
+            }
+        }
+    }
+}
+
+impl Level {
+    fn to_usize(&self, last: usize) -> usize {
+        match self {
+            Self::N(n) => *n as usize,
+            Self::Last => last,
+        }
+    }
+}
+
 impl Display for JsonPath {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.mode == Mode::Strict {
@@ -358,7 +392,7 @@ impl Display for AccessorOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MemberWildcard => write!(f, ".*"),
-            Self::RecursiveMemberWildcard(level) => write!(f, ".**{level}"),
+            Self::DescendantMemberWildcard(level) => write!(f, ".**{level}"),
             Self::ElementWildcard => write!(f, "[*]"),
             Self::Member(field) => write!(f, ".\"{field}\""),
             Self::Element(indices) => {
