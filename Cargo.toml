@@ -11,3 +11,11 @@ regex = "1"
 serde_json = "1"
 simd-json = { version = "0.13", optional = true }
 thiserror = "1"
+
+[dev-dependencies]
+libtest-mimic = "0.6"
+
+[[test]]
+name = "pg_jsonb_jsonpath"
+path = "tests/pg_jsonb_jsonpath.rs"
+harness = false
