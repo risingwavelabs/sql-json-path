@@ -586,36 +586,31 @@ impl<'a, T: Json> Evaluator<'a, T> {
     }
 
     fn eval_descendant_member_wildcard(&self, levels: &LevelRange) -> Result<Vec<Cow<'a, T>>> {
-        let set = match self.current.as_array() {
+        let mut set = match self.current.as_array() {
             Some(array) if self.is_lax() => array.list(),
             _ => vec![self.current],
         };
         // expand all levels
-        let mut level_sets = vec![set];
-        for level in 1.. {
-            // early exit if the level is out of range
-            if levels.exceeded(level) {
-                break;
-            }
-            let mut new_set = vec![];
-            for v in level_sets.last().unwrap().iter() {
-                if let Some(object) = v.as_object() {
-                    new_set.extend(object.list_value());
+        // level i is set[level_start[i] .. level_start[i+1]]
+        let mut level_start = vec![0, set.len()];
+        for l in 1..=levels.end() {
+            let last_level_range = level_start[l as usize - 1]..level_start[l as usize];
+            for i in last_level_range {
+                if let Some(object) = set[i].as_object() {
+                    set.extend(object.list_value());
                 }
             }
-            if new_set.is_empty() {
+            if set.len() == level_start[l as usize] {
+                // this level is empty
                 break;
             }
-            level_sets.push(new_set);
+            level_start.push(set.len());
         }
-        // flatten the level sets in range
-        let last_level = level_sets.len() - 1;
-        let new_set = level_sets[levels.to_range(last_level)]
-            .iter()
-            .flatten()
-            .cloned()
-            .map(Cow::Borrowed)
-            .collect();
+        // return the set in level range
+        let last_level = level_start.len() - 2;
+        let level_range = levels.to_range(last_level);
+        let set_range = level_start[level_range.start]..level_start[level_range.end];
+        let new_set = set[set_range].iter().cloned().map(Cow::Borrowed).collect();
         Ok(new_set)
     }
 

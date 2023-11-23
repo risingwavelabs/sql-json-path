@@ -241,17 +241,28 @@ impl PathPrimary {
 }
 
 impl LevelRange {
-    /// Returns true if the given level is exceeded by this range.
-    pub(crate) fn exceeded(&self, level: u32) -> bool {
+    /// Returns the upper bound of the range.
+    /// If no upper bound, returns `u32::MAX`.
+    pub(crate) fn end(&self) -> u32 {
         match self {
-            Self::All => false,
-            Self::One(Level::N(n)) => level > *n,
-            Self::Range(_, Level::N(end)) => level > *end,
-            _ => false,
+            Self::One(Level::N(n)) => *n,
+            Self::Range(_, Level::N(end)) => *end,
+            _ => u32::MAX,
         }
     }
 
-    /// Resolve the range.
+    /// Resolve the range with the given `last`.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// last = 3
+    /// .**             => 0..4
+    /// .**{1}          => 1..2
+    /// .**{1 to 4}     => 1..3
+    /// .**{1 to last}  => 1..4
+    /// .**{last to 2}  => 3..3
+    /// ```
     pub(crate) fn to_range(&self, last: usize) -> std::ops::Range<usize> {
         match self {
             Self::All => 0..last + 1,
