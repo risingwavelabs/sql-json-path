@@ -57,6 +57,8 @@ pub enum Error {
     KeyValueNotObject,
     #[error("division by zero")]
     DivisionByZero,
+    #[error("single boolean result is expected")]
+    ExpectSingleBoolean,
 }
 
 /// Truth value used in SQL/JSON path predicates.

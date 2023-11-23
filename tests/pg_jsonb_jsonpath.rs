@@ -84,38 +84,108 @@ fn parse_script(script: &'static str) -> Vec<Trial> {
 }
 
 fn test(sql: &str, expected: Result<Vec<String>, &str>) -> Result<(), Failed> {
-    let r1 = regex::Regex::new(r#"jsonb '(.*)' @\? '(.*)';"#).unwrap();
+    // match one of:
+    // jsonb 'json' @? 'path';
+    // jsonb 'json' @@ 'path';
+    let r1 = regex::Regex::new(r#"jsonb '(.*)' (@\?|@@) '(.*)';"#).unwrap();
     if let Some(capture) = r1.captures(sql) {
         let json = capture.get(1).unwrap().as_str();
-        let path = capture.get(2).unwrap().as_str();
-        match (jsonb_path_exists(json, path, "{}", true), expected) {
-            (Ok(b), Ok(expected)) if b == (expected[0] == "t") => return Ok(()),
-            (Err(e), Err(msg)) if e.to_string().contains(msg) => return Ok(()),
-            (actual, expected) => {
-                return Err(format!("expected: {expected:?}, got: {actual:?}").into())
-            }
-        }
+        let op = capture.get(2).unwrap().as_str();
+        let path = capture.get(3).unwrap().as_str();
+        let actual = match op {
+            "@?" => jsonb_path_exists(json, path, "{}", true),
+            "@@" => jsonb_path_match(json, path, "{}", true),
+            _ => return Err(format!("invalid operator: {}", op).into()),
+        };
+        return assert_match(actual, expected);
     }
-    let r2 = regex::Regex::new(r#"jsonb_path_query\('(.*)',\s*'(.*)'\);"#).unwrap();
+    // match one of:
+    // jsonb_path_*('json', 'path');
+    // jsonb_path_*('json', 'path', 'vars');
+    // jsonb_path_*('json', 'path', vars => 'vars');
+    // jsonb_path_*('json', 'path', silent => [true|false]);
+    let r2 = regex::Regex::new(
+        r#"([a-z_]+)\('([^']*)',\s*'([^']*)'(?:,\s*(?:vars =>)? '([^']*)')?(?:,\s*silent => (\w+))?\);"#,
+    )
+    .unwrap();
     if let Some(capture) = r2.captures(sql) {
-        let json = capture.get(1).unwrap().as_str();
-        let path = capture.get(2).unwrap().as_str();
-        match (jsonb_path_query(json, path, "{}", false), expected) {
-            (Ok(b), Ok(expected)) if b == expected => return Ok(()),
-            (actual, expected) => {
-                return Err(format!("expected: {expected:?}, got: {actual:?}").into())
+        let func = capture.get(1).unwrap().as_str();
+        let json = capture.get(2).unwrap().as_str();
+        let path = capture.get(3).unwrap().as_str();
+        let vars = capture.get(4).map_or("{}", |s| s.as_str());
+        let silent = capture.get(5).map_or(false, |s| s.as_str() == "true");
+        // println!("capture: {:#?}", capture);
+        let actual = match func {
+            "jsonb_path_exists" => jsonb_path_exists(json, path, vars, silent),
+            "jsonb_path_match" => jsonb_path_match(json, path, vars, silent),
+            "jsonb_path_query" => jsonb_path_query(json, path, vars, silent),
+            "jsonb_path_query_array" => {
+                jsonb_path_query_array(json, path, vars, silent).map(|s| vec![s])
             }
-        }
+            "jsonb_path_query_first" => {
+                jsonb_path_query_first(json, path, vars, silent).map(|s| s.into_iter().collect())
+            }
+            _ => return Err(format!("invalid function: {}", func).into()),
+        };
+        return assert_match(actual, expected);
     }
     Err("unrecognized query".into())
 }
 
-fn jsonb_path_exists(json: &str, path: &str, vars: &str, silent: bool) -> Result<bool, EvalError> {
+fn assert_match(
+    actual: Result<Vec<String>, EvalError>,
+    expected: Result<Vec<String>, &str>,
+) -> Result<(), Failed> {
+    match (actual, expected) {
+        (Ok(b), Ok(expected)) if b == expected => return Ok(()),
+        (Err(e), Err(msg)) if e.to_string().contains(msg) => return Ok(()),
+        (actual, expected) => return Err(format!("expected: {expected:?}, got: {actual:?}").into()),
+    }
+}
+
+fn jsonb_path_exists(
+    json: &str,
+    path: &str,
+    vars: &str,
+    silent: bool,
+) -> Result<Vec<String>, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
     let vars = serde_json::Value::from_str(vars).unwrap();
     let path = JsonPath::from_str(path).unwrap();
-    let exist = path.exists_with_vars(&json, &vars)?;
-    Ok(exist)
+    let exist = match path.exists_with_vars(&json, &vars) {
+        Ok(x) => x,
+        Err(_) if silent => return Ok(vec!["".into()]),
+        Err(e) => return Err(e),
+    };
+    Ok(vec![if exist { "t" } else { "f" }.to_string()])
+}
+
+fn jsonb_path_match(
+    json: &str,
+    path: &str,
+    vars: &str,
+    silent: bool,
+) -> Result<Vec<String>, EvalError> {
+    let json = serde_json::Value::from_str(json).unwrap();
+    let vars = serde_json::Value::from_str(vars).unwrap();
+    let path = JsonPath::from_str(path).unwrap();
+    let result = match path.query_first_with_vars(&json, &vars) {
+        Ok(x) => x,
+        Err(_) if silent => return Ok(vec!["".into()]),
+        Err(e) => return Err(e),
+    };
+    match result {
+        Some(value) => {
+            if value.as_ref().is_null() {
+                Ok(vec!["".to_string()])
+            } else if let Some(b) = value.as_ref().as_bool() {
+                Ok(vec![if b { "t" } else { "f" }.to_string()])
+            } else {
+                Err(EvalError::ExpectSingleBoolean)
+            }
+        }
+        None => Ok(vec!["".to_string()]),
+    }
 }
 
 fn jsonb_path_query(
@@ -127,13 +197,45 @@ fn jsonb_path_query(
     let json = serde_json::Value::from_str(json).unwrap();
     let vars = serde_json::Value::from_str(vars).unwrap();
     let path = JsonPath::from_str(path).unwrap();
-    let list = path.query(&json)?;
+    let list = match path.query_with_vars(&json, &vars) {
+        Ok(x) => x,
+        Err(_) if silent => return Ok(vec![]),
+        Err(e) => return Err(e),
+    };
     Ok(list.into_iter().map(|v| v.to_string()).collect())
 }
 
-fn jsonb_path_query_first(json: &str, path: &str) -> Result<Option<String>, EvalError> {
+fn jsonb_path_query_array(
+    json: &str,
+    path: &str,
+    vars: &str,
+    silent: bool,
+) -> Result<String, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
+    let vars = serde_json::Value::from_str(vars).unwrap();
     let path = JsonPath::from_str(path).unwrap();
-    let list = path.query_first(&json)?;
+    let list = match path.query_with_vars(&json, &vars) {
+        Ok(x) => x,
+        Err(_) if silent => return Ok("".into()),
+        Err(e) => return Err(e),
+    };
+    let array = serde_json::Value::Array(list.into_iter().map(|v| v.into_owned()).collect());
+    Ok(array.to_string())
+}
+
+fn jsonb_path_query_first(
+    json: &str,
+    path: &str,
+    vars: &str,
+    silent: bool,
+) -> Result<Option<String>, EvalError> {
+    let json = serde_json::Value::from_str(json).unwrap();
+    let vars = serde_json::Value::from_str(vars).unwrap();
+    let path = JsonPath::from_str(path).unwrap();
+    let list = match path.query_first_with_vars(&json, &vars) {
+        Ok(x) => x,
+        Err(_) if silent => return Ok(None),
+        Err(e) => return Err(e),
+    };
     Ok(list.map(|v| v.to_string()))
 }
