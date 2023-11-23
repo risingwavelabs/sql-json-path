@@ -19,11 +19,11 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_while, take_while1},
     character::complete::{char, multispace0 as s},
-    combinator::{cut, map, opt, value, verify},
+    combinator::{cut, eof, map, opt, value, verify},
     error::context,
     multi::{fold_many0, many0, separated_list1},
     number::complete::double,
-    sequence::{delimited, pair, preceded, separated_pair, tuple},
+    sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
     Err, Finish, IResult, Offset,
 };
 use serde_json::Number;
@@ -47,15 +47,9 @@ impl FromStr for JsonPath {
                 message: "empty jsonpath".into(),
             });
         }
-        let (rest, json_path) = json_path(s)
+        let (_, json_path) = json_path(s)
             .finish()
             .map_err(|e| Error::from_input_error(s, e))?;
-        if !rest.is_empty() {
-            return Err(Error {
-                position: s.offset(rest),
-                message: format!("unexpected trailing characters: {rest}").into(),
-            });
-        }
         Checker::default()
             .visit_json_path(&json_path)
             .map_err(|msg| Error {
@@ -84,9 +78,16 @@ impl Error {
 
 fn json_path(input: &str) -> IResult<&str, JsonPath> {
     map(
-        delimited(s, separated_pair(mode, s, expr_or_predicate), s),
+        preceded(s, separated_pair(mode, s, expr_or_predicate_eof)),
         |(mode, expr)| JsonPath { mode, expr },
     )(input)
+}
+
+fn expr_or_predicate_eof(input: &str) -> IResult<&str, ExprOrPredicate> {
+    alt((
+        map(terminated(predicate, pair(s, eof)), ExprOrPredicate::Pred),
+        map(terminated(expr, pair(s, eof)), ExprOrPredicate::Expr),
+    ))(input)
 }
 
 fn expr_or_predicate(input: &str) -> IResult<&str, ExprOrPredicate> {
@@ -225,7 +226,6 @@ fn expr1(input: &str) -> IResult<&str, Expr> {
 fn expr2(input: &str) -> IResult<&str, Expr> {
     alt((
         accessor_expr,
-        delimited(pair(char('('), s), expr, pair(s, char(')'))),
         map(preceded(pair(char('+'), s), expr2), |expr| match &expr {
             // constant folding
             Expr::PathPrimary(PathPrimary::Value(Value::Number(_))) => expr,

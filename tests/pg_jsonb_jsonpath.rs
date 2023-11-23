@@ -46,7 +46,11 @@ fn parse_script(script: &'static str) -> Vec<Trial> {
             sql.push_str(line.trim());
         }
         // not supported
-        let ignored = sql.contains(".datetime") || sql.contains("_tz") || sql.contains("**");
+        let ignored = sql.contains(".datetime")
+            || sql.contains("_tz")
+            || sql.contains("**")
+            // invalid serde_json::Value
+            || sql.contains("1e1000");
 
         let (_, line) = lines.next().expect("eof");
         if let Some(msg) = line.strip_prefix("ERROR:  ") {
@@ -174,24 +178,26 @@ fn jsonb_path_match(
     let json = serde_json::Value::from_str(json).unwrap();
     let vars = serde_json::Value::from_str(vars).unwrap();
     let path = JsonPath::from_str(path).unwrap();
-    let result = match path.query_first_with_vars(&json, &vars) {
+    let result = match path.query_with_vars(&json, &vars) {
         Ok(x) => x,
         Err(e) if silent && e.can_silent() => return Ok(vec!["".into()]),
         Err(e) => return Err(e),
     };
-    match result {
-        Some(value) => {
-            if value.as_ref().is_null() {
-                Ok(vec!["".to_string()])
-            } else if let Some(b) = value.as_ref().as_bool() {
-                Ok(vec![if b { "t" } else { "f" }.to_string()])
-            } else if silent {
-                Ok(vec!["".to_string()])
-            } else {
-                Err(EvalError::ExpectSingleBoolean)
-            }
+    if result.len() != 1 {
+        if silent {
+            return Ok(vec!["".into()]);
+        } else {
+            return Err(EvalError::ExpectSingleBoolean);
         }
-        None => Ok(vec!["".to_string()]),
+    }
+    if result[0].as_ref().is_null() {
+        Ok(vec!["".to_string()])
+    } else if let Some(b) = result[0].as_ref().as_bool() {
+        Ok(vec![if b { "t" } else { "f" }.to_string()])
+    } else if silent {
+        Ok(vec!["".to_string()])
+    } else {
+        Err(EvalError::ExpectSingleBoolean)
     }
 }
 

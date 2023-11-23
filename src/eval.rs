@@ -55,8 +55,12 @@ pub enum Error {
     RightOperandNotNumeric(BinaryOp),
     #[error("jsonpath item method .{0}() can only be applied to a numeric value")]
     MethodNotNumeric(&'static str),
+    #[error("jsonpath item method .size() can only be applied to an array")]
+    SizeNotArray,
     #[error("jsonpath item method .double() can only be applied to a string or numeric value")]
     DoubleTypeError,
+    #[error("numeric argument of jsonpath item method .double() is out of range for type double precision")]
+    DoubleOutOfRange,
     #[error("string argument of jsonpath item method .double() is not a valid representation of a double precision number")]
     InvalidDouble,
     #[error("jsonpath item method .keyvalue() can only be applied to an object")]
@@ -553,57 +557,79 @@ impl<'a, T: Json> Evaluator<'a, T> {
 
     /// Evaluates the accessor operator.
     fn eval_accessor_op(&self, op: &AccessorOp) -> Result<Vec<Cow<'a, T>>> {
-        // unwrap the current value if it is an array
-        if self.current.is_array()
-            && self.is_lax()
-            && matches!(
-                op,
-                AccessorOp::MemberWildcard | AccessorOp::Member(_) | AccessorOp::FilterExpr(_)
-            )
-        {
-            let mut new_set = vec![];
-            for v in self.current.as_array().unwrap().list() {
-                new_set.extend(self.with_current(v).eval_accessor_op(op)?);
-            }
-            return Ok(new_set);
-        }
         match op {
-            AccessorOp::MemberWildcard => {
-                let object = lax!(self, self.current.as_object(), Error::WildcardMemberAccess);
-                // TODO: optimize first
-                Ok(object.list_value().into_iter().map(Cow::Borrowed).collect())
-            }
-            AccessorOp::ElementWildcard => {
-                if !self.current.is_array() && self.is_lax() {
-                    // wrap the current value into an array
-                    return Ok(vec![Cow::Borrowed(self.current)]);
-                }
-                let array = lax!(self, self.current.as_array(), Error::WildcardArrayAccess);
-                if self.is_first() {
-                    return Ok(array.get(0).map(Cow::Borrowed).into_iter().collect());
-                }
-                Ok(array.list().into_iter().map(Cow::Borrowed).collect())
-            }
-            AccessorOp::Member(name) => {
-                let object = lax!(self, self.current.as_object(), Error::MemberAccess);
-                let member = lax!(self, object.get(name), Error::NoKey(name.clone().into()));
-                Ok(vec![Cow::Borrowed(member)])
-            }
+            AccessorOp::MemberWildcard => self.eval_member_wildcard(),
+            AccessorOp::ElementWildcard => self.eval_element_wildcard(),
+            AccessorOp::Member(name) => self.eval_member(name),
             AccessorOp::Element(indices) => self.eval_element_accessor(indices),
-            AccessorOp::FilterExpr(pred) => {
-                if self.eval_predicate(pred)?.is_true() {
-                    Ok(vec![Cow::Borrowed(self.current)])
-                } else {
-                    Ok(vec![])
-                }
-            }
+            AccessorOp::FilterExpr(pred) => self.eval_filter_expr(pred),
             AccessorOp::Method(method) => self.eval_method(method),
         }
     }
 
+    fn eval_member_wildcard(&self) -> Result<Vec<Cow<'a, T>>> {
+        let set = match self.current.as_array() {
+            Some(array) if self.is_lax() => array.list(),
+            _ => vec![self.current],
+        };
+        let mut new_set = vec![];
+        for v in set {
+            let object = lax!(self, v.as_object(), Error::WildcardMemberAccess);
+            for v in object.list_value() {
+                new_set.push(Cow::Borrowed(v));
+            }
+        }
+        Ok(new_set)
+    }
+
+    fn eval_element_wildcard(&self) -> Result<Vec<Cow<'a, T>>> {
+        if !self.current.is_array() && self.is_lax() {
+            // wrap the current value into an array
+            return Ok(vec![Cow::Borrowed(self.current)]);
+        }
+        let array = lax!(self, self.current.as_array(), Error::WildcardArrayAccess);
+        if self.is_first() {
+            return Ok(array.get(0).map(Cow::Borrowed).into_iter().collect());
+        }
+        Ok(array.list().into_iter().map(Cow::Borrowed).collect())
+    }
+
+    /// Evaluates the member accessor.
+    fn eval_member(&self, name: &str) -> Result<Vec<Cow<'a, T>>> {
+        let set = match self.current.as_array() {
+            Some(array) if self.is_lax() => array.list(),
+            _ => vec![self.current],
+        };
+        let mut new_set = vec![];
+        for v in set {
+            let object = lax!(self, v.as_object(), Error::MemberAccess);
+            let elem = lax!(self, object.get(name), Error::NoKey(name.into()));
+            new_set.push(Cow::Borrowed(elem));
+        }
+        Ok(new_set)
+    }
+
     /// Evaluates the element accessor.
     fn eval_element_accessor(&self, indices: &[ArrayIndex]) -> Result<Vec<Cow<'a, T>>> {
-        let array = lax!(self, self.current.as_array(), Error::ArrayAccess);
+        // wrap the scalar value into an array in lax mode
+        enum ArrayOrScalar<'a, T: JsonRef<'a>> {
+            Array(T::Array),
+            Scalar(T),
+        }
+        impl<'a, T: JsonRef<'a>> ArrayOrScalar<'a, T> {
+            fn get(&self, index: usize) -> Option<T> {
+                match self {
+                    ArrayOrScalar::Array(array) => array.get(index),
+                    ArrayOrScalar::Scalar(scalar) if index == 0 => Some(*scalar),
+                    _ => None,
+                }
+            }
+        }
+        let array = match self.current.as_array() {
+            Some(array) => ArrayOrScalar::Array(array),
+            None if self.is_lax() => ArrayOrScalar::Scalar(self.current),
+            None => return Err(Error::ArrayAccess),
+        };
         let mut elems = Vec::with_capacity(indices.len());
         for index in indices {
             let eval_index = |expr: &Expr| {
@@ -635,8 +661,11 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 ArrayIndex::Slice(begin, end) => {
                     let begin = eval_index(begin)?;
                     let end = eval_index(end)?;
-                    let begin: usize =
-                        lax!(self, begin.try_into().ok(), Error::ArrayIndexOutOfBounds; continue);
+                    let begin: usize = match begin.try_into() {
+                        Ok(i) => i,
+                        Err(_) if self.is_lax() => 0,
+                        Err(_) => return Err(Error::ArrayIndexOutOfBounds),
+                    };
                     let end: usize =
                         lax!(self, end.try_into().ok(), Error::ArrayIndexOutOfBounds; continue);
                     if begin > end && !self.is_lax() {
@@ -652,8 +681,36 @@ impl<'a, T: Json> Evaluator<'a, T> {
         Ok(elems)
     }
 
+    fn eval_filter_expr(&self, pred: &Predicate) -> Result<Vec<Cow<'a, T>>> {
+        let set = match self.current.as_array() {
+            Some(array) if self.is_lax() => array.list(),
+            _ => vec![self.current],
+        };
+        let mut new_set = vec![];
+        for v in set {
+            if self.with_current(v).eval_predicate(pred)?.is_true() {
+                new_set.push(Cow::Borrowed(v));
+                if self.is_first() {
+                    break;
+                }
+            }
+        }
+        Ok(new_set)
+    }
+
     /// Evaluates the item method.
     fn eval_method(&self, method: &Method) -> Result<Vec<Cow<'a, T>>> {
+        // unwrap the current value if it is an array
+        if self.current.is_array()
+            && self.is_lax()
+            && !matches!(method, Method::Size | Method::Type)
+        {
+            let mut new_set = vec![];
+            for v in self.current.as_array().unwrap().list() {
+                new_set.extend(self.with_current(v).eval_method(method)?);
+            }
+            return Ok(new_set);
+        }
         match method {
             Method::Type => self.eval_method_type().map(|v| vec![v]),
             Method::Size => self.eval_method_size().map(|v| vec![v]),
@@ -688,9 +745,11 @@ impl<'a, T: Json> Evaluator<'a, T> {
         let size = if let Some(array) = self.current.as_array() {
             // The size of an SQL/JSON array is the number of elements in the array.
             array.len()
-        } else {
+        } else if self.is_lax() {
             // The size of an SQL/JSON object or a scalar is 1.
             1
+        } else {
+            return Err(Error::SizeNotArray);
         };
         Ok(Cow::Owned(T::from_u64(size as u64)))
     }
