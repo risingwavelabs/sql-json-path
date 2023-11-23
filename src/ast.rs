@@ -97,6 +97,8 @@ pub enum PathPrimary {
 pub enum AccessorOp {
     /// `.*` represents selecting all elements in an object.
     MemberWildcard,
+    /// `.**` represents selecting all elements in an object and its sub-objects.
+    RecursiveMemberWildcard(LevelRange),
     /// `[*]` represents selecting all elements in an array.
     ElementWildcard,
     /// `.<name>` represents selecting element that matched the name in an object, like `$.event`.
@@ -108,6 +110,24 @@ pub enum AccessorOp {
     FilterExpr(Box<Predicate>),
     /// `.method()` represents calling a method.
     Method(Method),
+}
+
+/// A level range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LevelRange {
+    /// none
+    All,
+    /// `{level}`
+    One(Level),
+    /// `{start to end}`
+    Range(Level, Level),
+}
+
+/// A level number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Level {
+    N(u32),
+    Last,
 }
 
 /// An array index.
@@ -338,6 +358,7 @@ impl Display for AccessorOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MemberWildcard => write!(f, ".*"),
+            Self::RecursiveMemberWildcard(level) => write!(f, ".**{level}"),
             Self::ElementWildcard => write!(f, "[*]"),
             Self::Member(field) => write!(f, ".\"{field}\""),
             Self::Element(indices) => {
@@ -352,6 +373,25 @@ impl Display for AccessorOp {
             }
             Self::FilterExpr(expr) => write!(f, "?({expr})"),
             Self::Method(method) => write!(f, ".{method}()"),
+        }
+    }
+}
+
+impl Display for LevelRange {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::All => Ok(()),
+            Self::One(level) => write!(f, "{{{level}}}"),
+            Self::Range(start, end) => write!(f, "{{{start} to {end}}}"),
+        }
+    }
+}
+
+impl Display for Level {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::N(n) => write!(f, "{n}"),
+            Self::Last => write!(f, "last"),
         }
     }
 }

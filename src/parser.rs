@@ -18,7 +18,7 @@ use crate::{ast::*, eval::NumberExt};
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_while, take_while1},
-    character::complete::{char, multispace0 as s},
+    character::complete::{char, multispace0 as s, u32},
     combinator::{cut, eof, map, opt, value, verify},
     error::context,
     multi::{fold_many0, many0, separated_list1},
@@ -269,6 +269,10 @@ fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
 
 fn accessor_op(input: &str) -> IResult<&str, AccessorOp> {
     alt((
+        map(
+            preceded(tag(".**"), level_range),
+            AccessorOp::RecursiveMemberWildcard,
+        ),
         value(AccessorOp::MemberWildcard, tag(".*")),
         value(AccessorOp::ElementWildcard, element_wildcard),
         map(item_method, AccessorOp::Method),
@@ -276,6 +280,34 @@ fn accessor_op(input: &str) -> IResult<&str, AccessorOp> {
         map(array_accessor, AccessorOp::Element),
         map(filter_expr, |expr| AccessorOp::FilterExpr(Box::new(expr))),
     ))(input)
+}
+
+fn level_range(input: &str) -> IResult<&str, LevelRange> {
+    alt((
+        map(
+            delimited(
+                pair(char('{'), s),
+                separated_pair(level, delimited(s, tag_no_case("to"), s), level),
+                pair(s, char('}')),
+            ),
+            |(start, end)| {
+                if start == end {
+                    LevelRange::One(start)
+                } else {
+                    LevelRange::Range(start, end)
+                }
+            },
+        ),
+        map(
+            delimited(pair(char('{'), s), level, pair(s, char('}'))),
+            |level| LevelRange::One(level),
+        ),
+        value(LevelRange::All, tag("")),
+    ))(input)
+}
+
+fn level(input: &str) -> IResult<&str, Level> {
+    alt((value(Level::Last, tag_no_case("last")), map(u32, Level::N)))(input)
 }
 
 fn element_wildcard(input: &str) -> IResult<&str, ()> {
@@ -349,7 +381,7 @@ fn scalar_value(input: &str) -> IResult<&str, Value> {
         value(Value::Null, tag("null")),
         value(Value::Boolean(true), tag("true")),
         value(Value::Boolean(false), tag("false")),
-        map(number, |n| Value::Number(n)),
+        map(number, Value::Number),
         map(string, Value::String),
         map(variable, Value::Variable),
     ))(input)
@@ -511,6 +543,7 @@ impl Checker {
     fn visit_accessor_op(&self, accessor_op: &AccessorOp) -> Result<(), &'static str> {
         match accessor_op {
             AccessorOp::ElementWildcard | AccessorOp::MemberWildcard => Ok(()),
+            AccessorOp::RecursiveMemberWildcard(_) => Ok(()),
             AccessorOp::Member(_) | AccessorOp::Method(_) => Ok(()),
             AccessorOp::FilterExpr(pred) => Self {
                 non_root: true,

@@ -559,6 +559,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
     fn eval_accessor_op(&self, op: &AccessorOp) -> Result<Vec<Cow<'a, T>>> {
         match op {
             AccessorOp::MemberWildcard => self.eval_member_wildcard(),
+            AccessorOp::RecursiveMemberWildcard(_) => todo!("evaluate .**"),
             AccessorOp::ElementWildcard => self.eval_element_wildcard(),
             AccessorOp::Member(name) => self.eval_member(name),
             AccessorOp::Element(indices) => self.eval_element_accessor(indices),
