@@ -123,7 +123,10 @@ fn test(sql: &str, expected: Result<Vec<String>, &str>) -> Result<(), Failed> {
                 jsonb_path_query_array(json, path, vars, silent).map(|s| vec![s])
             }
             "jsonb_path_query_first" => {
-                jsonb_path_query_first(json, path, vars, silent).map(|s| s.into_iter().collect())
+                jsonb_path_query_first(json, path, vars, silent).map(|s| match s {
+                    Some(s) => vec![s],
+                    None => vec!["".into()],
+                })
             }
             _ => return Err(format!("invalid function: {}", func).into()),
         };
@@ -139,7 +142,9 @@ fn assert_match(
     match (actual, expected) {
         (Ok(b), Ok(expected)) if b == expected => return Ok(()),
         (Err(e), Err(msg)) if e.to_string().contains(msg) => return Ok(()),
-        (actual, expected) => return Err(format!("expected: {expected:?}, got: {actual:?}").into()),
+        (actual, expected) => {
+            return Err(format!("expected: {expected:?}, actual: {actual:?}").into())
+        }
     }
 }
 
@@ -154,7 +159,7 @@ fn jsonb_path_exists(
     let path = JsonPath::from_str(path).unwrap();
     let exist = match path.exists_with_vars(&json, &vars) {
         Ok(x) => x,
-        Err(_) if silent => return Ok(vec!["".into()]),
+        Err(e) if silent && e.can_silent() => return Ok(vec!["".into()]),
         Err(e) => return Err(e),
     };
     Ok(vec![if exist { "t" } else { "f" }.to_string()])
@@ -171,7 +176,7 @@ fn jsonb_path_match(
     let path = JsonPath::from_str(path).unwrap();
     let result = match path.query_first_with_vars(&json, &vars) {
         Ok(x) => x,
-        Err(_) if silent => return Ok(vec!["".into()]),
+        Err(e) if silent && e.can_silent() => return Ok(vec!["".into()]),
         Err(e) => return Err(e),
     };
     match result {
@@ -180,6 +185,8 @@ fn jsonb_path_match(
                 Ok(vec!["".to_string()])
             } else if let Some(b) = value.as_ref().as_bool() {
                 Ok(vec![if b { "t" } else { "f" }.to_string()])
+            } else if silent {
+                Ok(vec!["".to_string()])
             } else {
                 Err(EvalError::ExpectSingleBoolean)
             }
@@ -199,7 +206,7 @@ fn jsonb_path_query(
     let path = JsonPath::from_str(path).unwrap();
     let list = match path.query_with_vars(&json, &vars) {
         Ok(x) => x,
-        Err(_) if silent => return Ok(vec![]),
+        Err(e) if silent && e.can_silent() => return Ok(vec![]),
         Err(e) => return Err(e),
     };
     Ok(list.into_iter().map(|v| v.to_string()).collect())
@@ -216,7 +223,7 @@ fn jsonb_path_query_array(
     let path = JsonPath::from_str(path).unwrap();
     let list = match path.query_with_vars(&json, &vars) {
         Ok(x) => x,
-        Err(_) if silent => return Ok("".into()),
+        Err(e) if silent && e.can_silent() => return Ok("".into()),
         Err(e) => return Err(e),
     };
     let array = serde_json::Value::Array(list.into_iter().map(|v| v.into_owned()).collect());
@@ -234,7 +241,7 @@ fn jsonb_path_query_first(
     let path = JsonPath::from_str(path).unwrap();
     let list = match path.query_first_with_vars(&json, &vars) {
         Ok(x) => x,
-        Err(_) if silent => return Ok(None),
+        Err(e) if silent && e.can_silent() => return Ok(None),
         Err(e) => return Err(e),
     };
     Ok(list.map(|v| v.to_string()))

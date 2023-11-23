@@ -25,18 +25,24 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
+    // structural errors
+    #[error("JSON object does not contain key \"{0}\"")]
+    NoKey(Box<str>),
     #[error("jsonpath array accessor can only be applied to an array")]
     ArrayAccess,
+    #[error("jsonpath wildcard array accessor can only be applied to an array")]
+    WildcardArrayAccess,
     #[error("jsonpath member accessor can only be applied to an object")]
     MemberAccess,
+    #[error("jsonpath wildcard member accessor can only be applied to an object")]
+    WildcardMemberAccess,
     #[error("jsonpath array subscript is out of bounds")]
     ArrayIndexOutOfBounds,
+
     #[error("jsonpath array subscript is out of integer range")]
     ArrayIndexOutOfRange,
     #[error("jsonpath array subscript is not a single numeric value")]
     ArrayIndexNotNumeric,
-    #[error("JSON object does not contain key \"{0}\"")]
-    NoKey(Box<str>),
     #[error("could not find jsonpath variable \"{0}\"")]
     NoVariable(Box<str>),
     #[error("\"vars\" argument is not an object")]
@@ -59,6 +65,29 @@ pub enum Error {
     DivisionByZero,
     #[error("single boolean result is expected")]
     ExpectSingleBoolean,
+}
+
+impl Error {
+    /// Returns true if the error can be suppressed.
+    pub const fn can_silent(&self) -> bool {
+        // missing object field or array element
+        // unexpected JSON item type
+        // datetime and numeric errors.
+        !matches!(self, Self::NoVariable(_))
+    }
+
+    // A structural error is an attempt to access a non-existent member of an object or element of an array.
+    pub const fn is_structural(&self) -> bool {
+        matches!(
+            self,
+            Self::NoKey(_)
+                | Self::ArrayAccess
+                | Self::WildcardArrayAccess
+                | Self::MemberAccess
+                | Self::WildcardMemberAccess
+                | Self::ArrayIndexOutOfBounds
+        )
+    }
 }
 
 /// Truth value used in SQL/JSON path predicates.
@@ -267,12 +296,12 @@ macro_rules! lax {
             None => return Err($err),
         }
     };
-    // for `Result`
+    // for `Result` in predicate
     ($self:expr, $expr:expr) => {
         match $expr {
             Ok(x) => x,
-            Err(_) if $self.is_lax() => return Ok(vec![]),
-            Err(e) => return Err(e),
+            Err(e @ Error::NoVariable(_)) => return Err(e),
+            Err(_) => return Ok(Truth::Unknown),
         }
     };
 }
@@ -281,6 +310,11 @@ impl<'a, T: Json> Evaluator<'a, T> {
     /// Returns true if the evaluator is in lax mode.
     fn is_lax(&self) -> bool {
         matches!(self.mode, Mode::Lax)
+    }
+
+    /// Returns true if the path engine is permitted to stop evaluation early on the first success.
+    fn is_first(&self) -> bool {
+        self.first && self.is_lax()
     }
 
     /// Creates a new evaluator with the given current value.
@@ -336,18 +370,14 @@ impl<'a, T: Json> Evaluator<'a, T> {
     fn eval_predicate(&self, pred: &Predicate) -> Result<Truth> {
         match pred {
             Predicate::Compare(op, left, right) => {
-                let Ok(left) = self.all().eval_expr(left) else {
-                    return Ok(Truth::Unknown);
-                };
-                let Ok(right) = self.all().eval_expr(right) else {
-                    return Ok(Truth::Unknown);
-                };
+                let left = lax!(self, self.all().eval_expr(left));
+                let right = lax!(self, self.all().eval_expr(right));
 
                 let mut result = Truth::False;
                 // The cross product of these SQL/JSON sequences is formed.
                 // Each SQL/JSON item in one SQL/JSON sequence is compared to each item in the other SQL/JSON sequence.
-                'product: for l in left.iter() {
-                    for r in right.iter() {
+                'product: for r in right.iter() {
+                    for l in left.iter() {
                         let res = eval_compare::<T>(*op, l.as_ref(), r.as_ref());
                         result = result.merge(res);
                         // The predicate is Unknown if there any pair of SQL/JSON items in the cross product is not comparable.
@@ -362,10 +392,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 Ok(result)
             }
             Predicate::Exists(expr) => {
-                let Ok(set) = self.first().eval_expr(expr) else {
-                    // If the result of the path expression is an error, then result is Unknown.
-                    return Ok(Truth::Unknown);
-                };
+                let set = lax!(self, self.first().eval_expr(expr));
                 // If the result of the path expression is an empty SQL/JSON sequence, then result is False.
                 // Otherwise, result is True.
                 Ok(Truth::from(!set.is_empty()))
@@ -389,9 +416,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 Ok(Truth::from(inner.is_unknown()))
             }
             Predicate::StartsWith(expr, prefix) => {
-                let Ok(set) = self.eval_expr(expr) else {
-                    return Ok(Truth::Unknown);
-                };
+                let set = lax!(self, self.all().eval_expr(expr));
                 let prefix = self.eval_value(prefix)?;
                 let prefix = prefix.as_ref().as_str().unwrap();
                 let mut result = Truth::False;
@@ -408,9 +433,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 Ok(result)
             }
             Predicate::LikeRegex(expr, regex) => {
-                let Ok(set) = self.eval_expr(expr) else {
-                    return Ok(Truth::Unknown);
-                };
+                let set = lax!(self, self.all().eval_expr(expr));
                 let mut result = Truth::False;
                 for v in set {
                     let res = match v.as_ref().as_str() {
@@ -449,7 +472,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                             new_set.extend(self.with_current(*v).eval_accessor_op(op)?);
                         }
                     }
-                    if self.first && !new_set.is_empty() {
+                    if self.is_first() && !new_set.is_empty() {
                         break;
                     }
                 }
@@ -459,7 +482,15 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 let set = self.eval_expr(expr)?;
                 let mut new_set = Vec::with_capacity(set.len());
                 for v in set {
-                    new_set.push(Cow::Owned(eval_unary_op(*op, v.as_ref())?));
+                    let v = v.as_ref();
+                    if v.is_array() && self.is_lax() {
+                        // unwrap the array and apply the operator to each element
+                        for v in v.as_array().unwrap().list() {
+                            new_set.push(Cow::Owned(eval_unary_op(*op, v)?));
+                        }
+                    } else {
+                        new_set.push(Cow::Owned(eval_unary_op(*op, v)?));
+                    }
                 }
                 Ok(new_set)
             }
@@ -472,11 +503,33 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 if right.len() != 1 {
                     return Err(Error::RightOperandNotNumeric(*op));
                 }
-                Ok(vec![Cow::Owned(eval_binary_op(
-                    *op,
-                    left[0].as_ref(),
-                    right[0].as_ref(),
-                )?)])
+                // unwrap left if it is an array
+                let left = if self.is_lax() {
+                    if let Some(array) = left[0].as_ref().as_array() {
+                        if array.len() != 1 {
+                            return Err(Error::LeftOperandNotNumeric(*op));
+                        }
+                        array.get(0).unwrap()
+                    } else {
+                        left[0].as_ref()
+                    }
+                } else {
+                    left[0].as_ref()
+                };
+                // unwrap right if it is an array
+                let right = if self.is_lax() {
+                    if let Some(array) = right[0].as_ref().as_array() {
+                        if array.len() != 1 {
+                            return Err(Error::RightOperandNotNumeric(*op));
+                        }
+                        array.get(0).unwrap()
+                    } else {
+                        right[0].as_ref()
+                    }
+                } else {
+                    right[0].as_ref()
+                };
+                Ok(vec![Cow::Owned(eval_binary_op(*op, left, right)?)])
             }
         }
     }
@@ -500,15 +553,33 @@ impl<'a, T: Json> Evaluator<'a, T> {
 
     /// Evaluates the accessor operator.
     fn eval_accessor_op(&self, op: &AccessorOp) -> Result<Vec<Cow<'a, T>>> {
+        // unwrap the current value if it is an array
+        if self.current.is_array()
+            && self.is_lax()
+            && matches!(
+                op,
+                AccessorOp::MemberWildcard | AccessorOp::Member(_) | AccessorOp::FilterExpr(_)
+            )
+        {
+            let mut new_set = vec![];
+            for v in self.current.as_array().unwrap().list() {
+                new_set.extend(self.with_current(v).eval_accessor_op(op)?);
+            }
+            return Ok(new_set);
+        }
         match op {
             AccessorOp::MemberWildcard => {
-                let object = lax!(self, self.current.as_object(), Error::MemberAccess);
+                let object = lax!(self, self.current.as_object(), Error::WildcardMemberAccess);
                 // TODO: optimize first
                 Ok(object.list_value().into_iter().map(Cow::Borrowed).collect())
             }
             AccessorOp::ElementWildcard => {
-                let array = lax!(self, self.current.as_array(), Error::ArrayAccess);
-                if self.first {
+                if !self.current.is_array() && self.is_lax() {
+                    // wrap the current value into an array
+                    return Ok(vec![Cow::Borrowed(self.current)]);
+                }
+                let array = lax!(self, self.current.as_array(), Error::WildcardArrayAccess);
+                if self.is_first() {
                     return Ok(array.get(0).map(Cow::Borrowed).into_iter().collect());
                 }
                 Ok(array.list().into_iter().map(Cow::Borrowed).collect())
@@ -694,11 +765,16 @@ impl<'a, T: Json> Evaluator<'a, T> {
 /// Return unknown if the values are not comparable.
 fn eval_compare<T: Json>(op: CompareOp, left: T::Borrowed<'_>, right: T::Borrowed<'_>) -> Truth {
     use CompareOp::*;
+    // arrays and objects are not comparable
+    if left.is_array() || left.is_object() || right.is_array() || right.is_object() {
+        return Truth::Unknown;
+    }
+    // SQL/JSON null is equal to SQL/JSON null, and is not greater than or less than anything.
     if left.is_null() && right.is_null() {
         return compare_ord(op, (), ()).into();
     }
     if left.is_null() || right.is_null() {
-        return false.into();
+        return (op == CompareOp::Ne).into();
     }
     if let (Some(left), Some(right)) = (left.as_bool(), right.as_bool()) {
         return compare_ord(op, left, right).into();
@@ -717,7 +793,7 @@ fn eval_compare<T: Json>(op: CompareOp, left: T::Borrowed<'_>, right: T::Borrowe
     if let (Some(left), Some(right)) = (left.as_str(), right.as_str()) {
         return compare_ord(op, left, right).into();
     }
-    // others (include arrays and objects) are not comparable
+    // others are not comparable
     Truth::Unknown
 }
 
