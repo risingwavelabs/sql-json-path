@@ -6,8 +6,6 @@
 
 [SQL/JSON Path] implementation in Rust.
 
-🚧 Under development 🚧
-
 ## Features
 
 - Compatible with [SQL/JSON Path] standard and PostgreSQL implementation.
@@ -70,6 +68,10 @@ See [PostgreSQL documentation](https://www.postgresql.org/docs/16/functions-json
     - [ ] `.datetime()`
     - [ ] `.datetime(template)`
     - [x] `.keyvalue()`
+
+## Testing
+
+This crate is tested against [PostgreSQL regression tests](tests/jsonb_jsonpath.out): `cargo test --test pg_jsonb_jsonpath`. 325 out of 430 tests are passed. 96 tests are skipped because they have unsupported features. 9 tests are failed because of incorrect implementation.
 
 ## License
 
