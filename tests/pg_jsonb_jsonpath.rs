@@ -143,11 +143,9 @@ fn assert_match(
     expected: Result<Vec<String>, &str>,
 ) -> Result<(), Failed> {
     match (actual, expected) {
-        (Ok(b), Ok(expected)) if b == expected => return Ok(()),
-        (Err(e), Err(msg)) if e.to_string().contains(msg) => return Ok(()),
-        (actual, expected) => {
-            return Err(format!("expected: {expected:?}, actual: {actual:?}").into())
-        }
+        (Ok(b), Ok(expected)) if b == expected => Ok(()),
+        (Err(e), Err(msg)) if e.to_string().contains(msg) => Ok(()),
+        (actual, expected) => Err(format!("expected: {expected:?}, actual: {actual:?}").into()),
     }
 }
 
