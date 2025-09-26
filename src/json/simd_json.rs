@@ -14,7 +14,9 @@
 
 use super::*;
 use ::simd_json::{
-    prelude::{TypedContainerValue, TypedScalarValue, ValueAsContainer, ValueAsScalar},
+    base::{ValueAsArray, ValueAsObject},
+    derived::{TypedArrayValue, TypedObjectValue},
+    prelude::{TypedScalarValue, ValueAsScalar},
     value::{
         borrowed::Object as BorrowedObject, owned::Object as OwnedObject, BorrowedValue, OwnedValue,
     },
@@ -22,7 +24,10 @@ use ::simd_json::{
 };
 
 impl<'b> Json for BorrowedValue<'b> {
-    type Borrowed<'a> = &'a BorrowedValue<'b> where 'b: 'a;
+    type Borrowed<'a>
+        = &'a BorrowedValue<'b>
+    where
+        'b: 'a;
 
     fn as_ref(&self) -> Self::Borrowed<'_> {
         self
@@ -102,11 +107,11 @@ impl<'a, 'b> JsonRef<'a> for &'a BorrowedValue<'b> {
     }
 
     fn as_array(self) -> Option<Self::Array> {
-        ValueAsContainer::as_array(self)
+        ValueAsArray::as_array(self)
     }
 
     fn as_object(self) -> Option<Self::Object> {
-        ValueAsContainer::as_object(self)
+        ValueAsObject::as_object(self)
     }
 
     fn is_null(self) -> bool {
@@ -122,11 +127,11 @@ impl<'a, 'b> JsonRef<'a> for &'a BorrowedValue<'b> {
     }
 
     fn is_array(self) -> bool {
-        TypedContainerValue::is_array(self)
+        TypedArrayValue::is_array(self)
     }
 
     fn is_object(self) -> bool {
-        TypedContainerValue::is_object(self)
+        TypedObjectValue::is_object(self)
     }
 }
 
@@ -247,11 +252,11 @@ impl<'a> JsonRef<'a> for &'a OwnedValue {
     }
 
     fn as_array(self) -> Option<Self::Array> {
-        ValueAsContainer::as_array(self)
+        ValueAsArray::as_array(self)
     }
 
     fn as_object(self) -> Option<Self::Object> {
-        ValueAsContainer::as_object(self)
+        ValueAsObject::as_object(self)
     }
 
     fn is_null(self) -> bool {
@@ -267,11 +272,11 @@ impl<'a> JsonRef<'a> for &'a OwnedValue {
     }
 
     fn is_array(self) -> bool {
-        TypedContainerValue::is_array(self)
+        TypedArrayValue::is_array(self)
     }
 
     fn is_object(self) -> bool {
-        TypedContainerValue::is_object(self)
+        TypedObjectValue::is_object(self)
     }
 }
 

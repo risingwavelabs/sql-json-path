@@ -890,9 +890,7 @@ fn eval_compare<T: Json>(op: CompareOp, left: T::Borrowed<'_>, right: T::Borrowe
 
 /// Evaluate the unary operator.
 fn eval_unary_op<T: Json>(op: UnaryOp, value: T::Borrowed<'_>) -> Result<T> {
-    let n = value
-        .as_number()
-        .ok_or_else(|| Error::UnaryOperandNotNumeric(op))?;
+    let n = value.as_number().ok_or(Error::UnaryOperandNotNumeric(op))?;
     Ok(match op {
         UnaryOp::Plus => value.to_owned(),
         UnaryOp::Minus => T::from_number(n.neg()),
@@ -905,12 +903,8 @@ fn eval_binary_op<T: Json>(
     left: T::Borrowed<'_>,
     right: T::Borrowed<'_>,
 ) -> Result<T> {
-    let left = left
-        .as_number()
-        .ok_or_else(|| Error::LeftOperandNotNumeric(op))?;
-    let right = right
-        .as_number()
-        .ok_or_else(|| Error::RightOperandNotNumeric(op))?;
+    let left = left.as_number().ok_or(Error::LeftOperandNotNumeric(op))?;
+    let right = right.as_number().ok_or(Error::RightOperandNotNumeric(op))?;
     Ok(T::from_number(match op {
         BinaryOp::Add => left.add(&right),
         BinaryOp::Sub => left.sub(&right),
