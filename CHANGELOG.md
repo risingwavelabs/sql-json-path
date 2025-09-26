@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2025-09-26
+
+- Bump dependencies to support `simd-json 0.16` and `jsonbb 0.2`.
+
 ## [0.1.0] - 2023-11-30
 
 - Inital release.
