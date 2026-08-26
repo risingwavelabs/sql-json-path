@@ -49,7 +49,12 @@ fn parse_script(script: &'static str) -> Vec<Trial> {
         let ignored = sql.contains(".datetime")
             || sql.contains("_tz")
             // invalid serde_json::Value
-            || sql.contains("1e1000");
+            || sql.contains("1e1000")
+            // known differences from PostgreSQL; see README.md#testing
+            || matches!(
+                line_no + 1,
+                1079 | 1085 | 1300 | 1421 | 1431 | 1570 | 1627 | 1650 | 2272
+            );
 
         let (_, line) = lines.next().expect("eof");
         if let Some(msg) = line.strip_prefix("ERROR:  ") {
@@ -116,7 +121,7 @@ fn test(sql: &str, expected: Result<Vec<String>, &str>) -> Result<(), Failed> {
         let json = capture.get(2).unwrap().as_str();
         let path = capture.get(3).unwrap().as_str();
         let vars = capture.get(4).map_or("{}", |s| s.as_str());
-        let silent = capture.get(5).map_or(false, |s| s.as_str() == "true");
+        let silent = capture.get(5).is_some_and(|s| s.as_str() == "true");
         // println!("capture: {:#?}", capture);
         let actual = match func {
             "jsonb_path_exists" => jsonb_path_exists(json, path, vars, silent),

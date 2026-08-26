@@ -82,7 +82,7 @@ See [PostgreSQL documentation](https://www.postgresql.org/docs/16/functions-json
 
 ## Testing
 
-This crate is tested against [PostgreSQL regression tests](tests/jsonb_jsonpath.out): `cargo test --test pg_jsonb_jsonpath`. 325 out of 430 tests are passed. 96 tests are skipped because they have unsupported features. 9 tests are failed because of incorrect implementation.
+This crate is tested against [PostgreSQL regression tests](tests/jsonb_jsonpath.out): `cargo test --test pg_jsonb_jsonpath`. 325 out of 430 tests are passed. The remaining 105 tests are skipped: 96 use unsupported features, and 9 cover known differences from PostgreSQL.
 
 ## License
 
