@@ -373,6 +373,17 @@ fn method(input: &str) -> IResult<&str, Method> {
         value(Method::Floor, tag_no_case("floor")),
         value(Method::Abs, tag_no_case("abs")),
         value(Method::Keyvalue, tag_no_case("keyvalue")),
+        value(Method::Bigint, tag_no_case("bigint")),
+        value(Method::Decimal, tag_no_case("decimal")),
+        value(Method::Integer, tag_no_case("integer")),
+        value(Method::Number, tag_no_case("number")),
+        value(Method::String, tag_no_case("string")),
+        value(Method::Boolean, tag_no_case("boolean")),
+        value(Method::Date, tag_no_case("date")),
+        value(Method::TimestampTz, tag_no_case("timestamp_tz")),
+        value(Method::Timestamp, tag_no_case("timestamp")),
+        value(Method::TimeTz, tag_no_case("time_tz")),
+        value(Method::Time, tag_no_case("time")),
     ))(input)
 }
 

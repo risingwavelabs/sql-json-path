@@ -155,6 +155,15 @@ fn parse() {
         r#"$.double().floor().ceiling().abs()"#,
     );
     test_match(r#"$.keyvalue().key"#, r#"$.keyvalue()."key""#);
+    test_match(
+        r#"$.bigint().integer().number().decimal()"#,
+        r#"$.bigint().integer().number().decimal()"#,
+    );
+    test_match(r#"$.string().boolean()"#, r#"$.string().boolean()"#);
+    test_match(
+        r#"$.date().time().time_tz().timestamp().timestamp_tz()"#,
+        r#"$.date().time().time_tz().timestamp().timestamp_tz()"#,
+    );
     // test_match(r#"$.datetime()"#, r#"$.datetime()"#);
     // test_match(
     //     r#"$.datetime("datetime template")"#,
