@@ -15,6 +15,7 @@
 //! This file is the runner of Postgres regression test.
 //! <https://github.com/postgres/postgres/blob/master/src/test/regress/expected/jsonb_jsonpath.out>
 
+use chrono::FixedOffset;
 use libtest_mimic::{Arguments, Failed, Trial};
 use sql_json_path::{EvalError, JsonPath};
 use std::str::FromStr;
@@ -46,14 +47,11 @@ fn parse_script(script: &'static str) -> Vec<Trial> {
             sql.push_str(line.trim());
         }
         // not supported
-        let ignored = sql.contains(".datetime")
-            || sql.contains("_tz")
-            // invalid serde_json::Value
-            || sql.contains("1e1000")
+        let ignored = line_no + 1 == 2210
             // known differences from PostgreSQL; see README.md#testing
             || matches!(
                 line_no + 1,
-                1079 | 1085 | 1300 | 1421 | 1431 | 1570 | 1627 | 1650 | 2272
+                1079 | 1085 | 1300 | 1421 | 1431 | 1627 | 1650 | 2272
             );
 
         let (_, line) = lines.next().expect("eof");
@@ -127,6 +125,7 @@ fn test(sql: &str, expected: Result<Vec<String>, &str>) -> Result<(), Failed> {
             "jsonb_path_exists" => jsonb_path_exists(json, path, vars, silent),
             "jsonb_path_match" => jsonb_path_match(json, path, vars, silent),
             "jsonb_path_query" => jsonb_path_query(json, path, vars, silent),
+            "jsonb_path_query_tz" => jsonb_path_query_tz(json, path, vars, silent),
             "jsonb_path_query_array" => {
                 jsonb_path_query_array(json, path, vars, silent).map(|s| vec![s])
             }
@@ -213,6 +212,24 @@ fn jsonb_path_query(
     let vars = serde_json::Value::from_str(vars).unwrap();
     let path = JsonPath::from_str(path).unwrap();
     let list = match path.query_with_vars(&json, &vars) {
+        Ok(x) => x,
+        Err(e) if silent && e.can_silent() => return Ok(vec![]),
+        Err(e) => return Err(e),
+    };
+    Ok(list.into_iter().map(|v| v.to_string()).collect())
+}
+
+fn jsonb_path_query_tz(
+    json: &str,
+    path: &str,
+    vars: &str,
+    silent: bool,
+) -> Result<Vec<String>, EvalError> {
+    let json = serde_json::Value::from_str(json).unwrap();
+    let vars = serde_json::Value::from_str(vars).unwrap();
+    let path = JsonPath::from_str(path).unwrap();
+    let timezone = FixedOffset::east_opt(0).unwrap();
+    let list = match path.query_with_vars_tz(&json, &vars, timezone) {
         Ok(x) => x,
         Err(e) if silent && e.can_silent() => return Ok(vec![]),
         Err(e) => return Err(e),

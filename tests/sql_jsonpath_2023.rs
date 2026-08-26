@@ -1,3 +1,4 @@
+use chrono::FixedOffset;
 use sql_json_path::JsonPath;
 
 fn query(input: &str, path: &str) -> Vec<serde_json::Value> {
@@ -66,6 +67,17 @@ fn datetime_conversion_methods() {
         query(r#""2023-08-15 12:34:56 +5:30""#, "$.timestamp_tz()"),
         vec![serde_json::json!("2023-08-15T12:34:56+05:30")]
     );
+    assert_eq!(
+        query(r#""2017-03-10 12:34:56+3:10""#, "$.datetime()"),
+        vec![serde_json::json!("2017-03-10T12:34:56+03:10")]
+    );
+    assert_eq!(
+        query(
+            r#""10-03-2017 12:34 +05:20""#,
+            r#"$.datetime("dd-mm-yyyy HH24:MI TZH:TZM")"#,
+        ),
+        vec![serde_json::json!("2017-03-10T12:34:00+05:20")]
+    );
 }
 
 #[test]
@@ -100,6 +112,14 @@ fn datetime_items_are_comparable() {
         ),
         vec![serde_json::json!(true)]
     );
+
+    let input = serde_json::json!("2023-08-15 00:00:00+00");
+    let vars = serde_json::json!({});
+    let path = JsonPath::new(r#"$.datetime() == "2023-08-15".datetime()"#).unwrap();
+    let result = path
+        .query_with_vars_tz(&input, &vars, FixedOffset::east_opt(0).unwrap())
+        .unwrap();
+    assert_eq!(result[0].as_ref(), &serde_json::json!(true));
 }
 
 #[test]

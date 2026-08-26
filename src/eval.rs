@@ -170,6 +170,18 @@ pub enum Error {
     DateTimeTypeError(&'static str),
     #[error("{0} format is not recognized: \"{1}\"")]
     InvalidDateTime(&'static str, Box<str>),
+    #[error("invalid datetime format separator: \"{0}\"")]
+    InvalidDateTimeFormatSeparator(char),
+    #[error("invalid value \"{0}\" for \"{1}\"")]
+    InvalidDateTimeValue(Box<str>, &'static str),
+    #[error("trailing characters remain in input string after datetime format")]
+    TrailingDateTimeCharacters,
+    #[error("unmatched format character \"{0}\"")]
+    UnmatchedDateTimeFormatCharacter(char),
+    #[error("input string is too short for datetime format")]
+    DateTimeInputTooShort,
+    #[error("cannot convert value from {0} to {1} without time zone usage")]
+    DateTimeTimezoneRequired(&'static str, &'static str),
     #[error("division by zero")]
     DivisionByZero,
     #[error("single boolean result is expected")]
@@ -290,6 +302,7 @@ impl JsonPath {
             array: T::null(),
             mode: self.mode,
             first: false,
+            timezone: None,
         }
         .eval_expr_or_predicate(&self.expr)
         .map(|set| set.into_iter().map(Item::into_json).collect())
@@ -311,6 +324,34 @@ impl JsonPath {
             array: T::null(),
             mode: self.mode,
             first: false,
+            timezone: None,
+        }
+        .eval_expr_or_predicate(&self.expr)
+        .map(|set| set.into_iter().map(Item::into_json).collect())
+    }
+
+    /// Evaluate the JSON path with variables and a session time zone.
+    ///
+    /// The time zone is used when comparisons need to convert between datetime
+    /// values with and without a time zone, matching PostgreSQL's `_tz`
+    /// JSONPath functions.
+    pub fn query_with_vars_tz<'a, T: JsonRef<'a>>(
+        &self,
+        value: T,
+        vars: T,
+        timezone: FixedOffset,
+    ) -> Result<Vec<Cow<'a, T::Owned>>> {
+        if !vars.is_object() {
+            return Err(Error::VarsNotObject);
+        }
+        Evaluator {
+            root: value,
+            current: ItemRef::Json(value),
+            vars,
+            array: T::null(),
+            mode: self.mode,
+            first: false,
+            timezone: Some(timezone),
         }
         .eval_expr_or_predicate(&self.expr)
         .map(|set| set.into_iter().map(Item::into_json).collect())
@@ -325,6 +366,7 @@ impl JsonPath {
             array: T::null(),
             mode: self.mode,
             first: true,
+            timezone: None,
         }
         .eval_expr_or_predicate(&self.expr)
         .map(|set| set.into_iter().next().map(Item::into_json))
@@ -346,6 +388,7 @@ impl JsonPath {
             array: T::null(),
             mode: self.mode,
             first: true,
+            timezone: None,
         }
         .eval_expr_or_predicate(&self.expr)
         .map(|set| set.into_iter().next().map(Item::into_json))
@@ -379,6 +422,8 @@ struct Evaluator<'a, T: Json + 'a> {
     mode: Mode,
     /// Only return the first result.
     first: bool,
+    /// Session time zone used by PostgreSQL-compatible `_tz` operations.
+    timezone: Option<FixedOffset>,
 }
 
 /// Unwrap the result or return an empty result if the evaluator is in lax mode.
@@ -440,6 +485,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
             array: T::borrow(self.array),
             mode: self.mode,
             first: self.first,
+            timezone: self.timezone,
         }
     }
 
@@ -489,7 +535,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 // Each SQL/JSON item in one SQL/JSON sequence is compared to each item in the other SQL/JSON sequence.
                 'product: for r in right.iter() {
                     for l in left.iter() {
-                        let res = eval_compare::<T>(*op, l.as_ref(), r.as_ref());
+                        let res = eval_compare::<T>(*op, l.as_ref(), r.as_ref(), self.timezone)?;
                         result = result.merge(res);
                         // The predicate is Unknown if there any pair of SQL/JSON items in the cross product is not comparable.
                         // the predicate is True if any pair is comparable and satisfies the comparison operator.
@@ -536,8 +582,15 @@ impl<'a, T: Json> Evaluator<'a, T> {
                         Some(s) => s.starts_with(prefix).into(),
                         None => Truth::Unknown,
                     };
-                    result = result.merge(res);
-                    if result.is_unknown() || result.is_true() && self.is_lax() {
+                    // In lax mode a matching item wins over non-string
+                    // (unknown) items. Strict mode must inspect the complete
+                    // sequence and preserve an unknown result.
+                    result = if self.is_lax() {
+                        result.or(res)
+                    } else {
+                        result.merge(res)
+                    };
+                    if result.is_true() && self.is_lax() {
                         break;
                     }
                 }
@@ -921,6 +974,9 @@ impl<'a, T: Json> Evaluator<'a, T> {
             Method::TimestampTz => self
                 .eval_method_datetime("timestamp_tz", DateTimeKind::TimestampTz)
                 .map(|v| vec![v]),
+            Method::Datetime(template) => self
+                .eval_method_generic_datetime(template.as_deref())
+                .map(|v| vec![v]),
         }
     }
 
@@ -959,8 +1015,12 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 return Err(Error::InvalidDouble);
             }
             Ok(Item::Json(Cow::Owned(T::from_f64(n))))
-        } else if current.is_number() {
-            Ok(Item::Json(Cow::Borrowed(current)))
+        } else if let Some(number) = current.as_number() {
+            let value = number.as_f64().ok_or(Error::DoubleOutOfRange)?;
+            if !value.is_finite() {
+                return Err(Error::DoubleOutOfRange);
+            }
+            Ok(Item::Json(Cow::Owned(T::from_f64(value))))
         } else {
             Err(Error::DoubleTypeError)
         }
@@ -1108,6 +1168,21 @@ impl<'a, T: Json> Evaluator<'a, T> {
         Ok(Item::DateTime(value))
     }
 
+    fn eval_method_generic_datetime(&self, template: Option<&str>) -> Result<Item<'a, T>> {
+        let string = self
+            .current
+            .as_json()
+            .and_then(JsonRef::as_str)
+            .ok_or(Error::DateTimeTypeError("datetime"))?;
+        let value = match template {
+            Some(template) => parse_datetime_template(string, template)?,
+            None => parse_iso_datetime(string)
+                .map(ParsedDateTime::into_value)
+                .ok_or_else(|| Error::InvalidDateTime("datetime", string.into()))?,
+        };
+        Ok(Item::DateTime(value))
+    }
+
     /// Evaluates the scalar value.
     fn eval_value(&self, value: &Value) -> Result<Item<'a, T>> {
         Ok(Item::Json(match value {
@@ -1135,6 +1210,213 @@ enum ParsedDateTime {
     TimeTz(NaiveTime, FixedOffset),
     Timestamp(NaiveDateTime),
     TimestampTz(DateTime<FixedOffset>),
+}
+
+impl ParsedDateTime {
+    fn into_value(self) -> DateTimeValue {
+        match self {
+            Self::Date(value) => DateTimeValue::Date(value),
+            Self::Time(value) => DateTimeValue::Time(value),
+            Self::TimeTz(value, offset) => DateTimeValue::TimeTz(value, offset),
+            Self::Timestamp(value) => DateTimeValue::Timestamp(value),
+            Self::TimestampTz(value) => DateTimeValue::TimestampTz(value),
+        }
+    }
+}
+
+#[derive(Default)]
+struct DateTimeParts {
+    year: Option<i32>,
+    month: Option<u32>,
+    day: Option<u32>,
+    hour: Option<u32>,
+    minute: Option<u32>,
+    second: Option<u32>,
+    offset_sign: Option<i32>,
+    offset_hour: Option<i32>,
+    offset_minute: Option<i32>,
+}
+
+fn parse_datetime_template(input: &str, template: &str) -> Result<DateTimeValue> {
+    let mut input_pos = 0;
+    let mut template_pos = 0;
+    let mut parts = DateTimeParts::default();
+
+    while template_pos < template.len() {
+        let rest = &template[template_pos..];
+        let upper = rest.to_ascii_uppercase();
+        let (token, width) = if upper.starts_with("YYYY") {
+            (Some("YYYY"), 4)
+        } else if upper.starts_with("HH24") {
+            (Some("HH24"), 2)
+        } else if upper.starts_with("TZH") {
+            (Some("TZH"), 2)
+        } else if upper.starts_with("TZM") {
+            (Some("TZM"), 2)
+        } else if upper.starts_with("DD") {
+            (Some("DD"), 2)
+        } else if upper.starts_with("MM") {
+            (Some("MM"), 2)
+        } else if upper.starts_with("MI") {
+            (Some("MI"), 2)
+        } else if upper.starts_with("SS") {
+            (Some("SS"), 2)
+        } else {
+            (None, 0)
+        };
+
+        if let Some(token) = token {
+            let token_len = token.len();
+            template_pos += token_len;
+            let sign = if token == "TZH" {
+                let ch = input[input_pos..]
+                    .chars()
+                    .next()
+                    .ok_or(Error::DateTimeInputTooShort)?;
+                if ch == '+' || ch == '-' {
+                    input_pos += ch.len_utf8();
+                    if ch == '-' {
+                        -1
+                    } else {
+                        1
+                    }
+                } else {
+                    return Err(Error::InvalidDateTimeValue(ch.to_string().into(), "TZH"));
+                }
+            } else {
+                1
+            };
+            let end = if token == "TZH" {
+                let digits = input[input_pos..]
+                    .bytes()
+                    .take(2)
+                    .take_while(u8::is_ascii_digit)
+                    .count();
+                if digits == 0 {
+                    let invalid = input[input_pos..]
+                        .chars()
+                        .next()
+                        .ok_or(Error::DateTimeInputTooShort)?;
+                    return Err(Error::InvalidDateTimeValue(
+                        invalid.to_string().into(),
+                        token,
+                    ));
+                }
+                input_pos + digits
+            } else {
+                input_pos
+                    .checked_add(width)
+                    .filter(|end| *end <= input.len())
+                    .ok_or(Error::DateTimeInputTooShort)?
+            };
+            let raw = &input[input_pos..end];
+            let value = raw
+                .parse::<i32>()
+                .map_err(|_| Error::InvalidDateTimeValue(raw.into(), token))?;
+            input_pos = end;
+            match token {
+                "YYYY" => parts.year = Some(value),
+                "MM" => parts.month = value.try_into().ok(),
+                "DD" => parts.day = value.try_into().ok(),
+                "HH24" => parts.hour = value.try_into().ok(),
+                "MI" => parts.minute = value.try_into().ok(),
+                "SS" => parts.second = value.try_into().ok(),
+                "TZH" => {
+                    parts.offset_sign = Some(sign);
+                    parts.offset_hour = Some(value);
+                }
+                "TZM" => parts.offset_minute = Some(value),
+                _ => unreachable!(),
+            }
+            continue;
+        }
+
+        let ch = rest.chars().next().unwrap();
+        if ch == '"' {
+            template_pos += 1;
+            let literal_start = template_pos;
+            let Some(literal_len) = template[literal_start..].find('"') else {
+                return Err(Error::InvalidDateTimeFormatSeparator('"'));
+            };
+            let literal = &template[literal_start..literal_start + literal_len];
+            if !input[input_pos..].starts_with(literal) {
+                let unmatched = literal.chars().next().unwrap_or('"');
+                return Err(Error::UnmatchedDateTimeFormatCharacter(unmatched));
+            }
+            input_pos += literal.len();
+            template_pos = literal_start + literal_len + 1;
+        } else if ch.is_ascii_punctuation() || ch.is_ascii_whitespace() {
+            let actual = input[input_pos..]
+                .chars()
+                .next()
+                .ok_or(Error::DateTimeInputTooShort)?;
+            if actual != ch {
+                return Err(Error::UnmatchedDateTimeFormatCharacter(ch));
+            }
+            input_pos += actual.len_utf8();
+            template_pos += ch.len_utf8();
+        } else {
+            return Err(Error::InvalidDateTimeFormatSeparator(ch));
+        }
+    }
+
+    if input_pos != input.len() {
+        return Err(Error::TrailingDateTimeCharacters);
+    }
+
+    let has_date = parts.year.is_some() || parts.month.is_some() || parts.day.is_some();
+    let has_time = parts.hour.is_some() || parts.minute.is_some() || parts.second.is_some();
+    let has_zone = parts.offset_hour.is_some() || parts.offset_minute.is_some();
+    let date = if has_date {
+        Some(
+            NaiveDate::from_ymd_opt(
+                parts.year.unwrap_or_default(),
+                parts.month.unwrap_or_default(),
+                parts.day.unwrap_or_default(),
+            )
+            .ok_or_else(|| Error::InvalidDateTime("datetime", input.into()))?,
+        )
+    } else {
+        None
+    };
+    let time = if has_time {
+        Some(
+            NaiveTime::from_hms_opt(
+                parts.hour.unwrap_or_default(),
+                parts.minute.unwrap_or_default(),
+                parts.second.unwrap_or_default(),
+            )
+            .ok_or_else(|| Error::InvalidDateTime("datetime", input.into()))?,
+        )
+    } else {
+        None
+    };
+    let offset = if has_zone {
+        let sign = parts.offset_sign.unwrap_or(1);
+        let seconds = sign
+            * (parts.offset_hour.unwrap_or_default() * 3600
+                + parts.offset_minute.unwrap_or_default() * 60);
+        Some(
+            FixedOffset::east_opt(seconds)
+                .ok_or_else(|| Error::InvalidDateTime("datetime", input.into()))?,
+        )
+    } else {
+        None
+    };
+
+    match (date, time, offset) {
+        (Some(date), None, None) => Ok(DateTimeValue::Date(date)),
+        (None, Some(time), None) => Ok(DateTimeValue::Time(time)),
+        (None, Some(time), Some(offset)) => Ok(DateTimeValue::TimeTz(time, offset)),
+        (Some(date), Some(time), None) => Ok(DateTimeValue::Timestamp(date.and_time(time))),
+        (Some(date), Some(time), Some(offset)) => Ok(DateTimeValue::TimestampTz(
+            offset
+                .from_local_datetime(&date.and_time(time))
+                .single()
+                .unwrap(),
+        )),
+        _ => Err(Error::InvalidDateTime("datetime", input.into())),
+    }
 }
 
 fn parse_datetime(input: &str, kind: DateTimeKind) -> Option<DateTimeValue> {
@@ -1259,17 +1541,27 @@ fn parse_boolean(input: &str) -> Option<bool> {
 /// Compare two values.
 ///
 /// Return unknown if the values are not comparable.
-fn eval_compare<T: Json>(op: CompareOp, left: ItemRef<'_, T>, right: ItemRef<'_, T>) -> Truth {
-    match (left, right) {
+fn eval_compare<T: Json>(
+    op: CompareOp,
+    left: ItemRef<'_, T>,
+    right: ItemRef<'_, T>,
+    timezone: Option<FixedOffset>,
+) -> Result<Truth> {
+    Ok(match (left, right) {
         (ItemRef::Json(left), ItemRef::Json(right)) => eval_compare_json::<T>(op, left, right),
         (ItemRef::DateTime(left), ItemRef::DateTime(right)) => {
-            eval_compare_datetime(op, left, right)
+            return eval_compare_datetime(op, left, right, timezone);
         }
         _ => Truth::Unknown,
-    }
+    })
 }
 
-fn eval_compare_datetime(op: CompareOp, left: &DateTimeValue, right: &DateTimeValue) -> Truth {
+fn eval_compare_datetime(
+    op: CompareOp,
+    left: &DateTimeValue,
+    right: &DateTimeValue,
+    timezone: Option<FixedOffset>,
+) -> Result<Truth> {
     let result = match (left, right) {
         (DateTimeValue::Date(left), DateTimeValue::Date(right)) => compare_ord(op, left, right),
         (DateTimeValue::Time(left), DateTimeValue::Time(right)) => compare_ord(op, left, right),
@@ -1301,9 +1593,62 @@ fn eval_compare_datetime(op: CompareOp, left: &DateTimeValue, right: &DateTimeVa
         (DateTimeValue::Timestamp(left), DateTimeValue::Date(right)) => {
             compare_ord(op, left, &right.and_hms_opt(0, 0, 0).unwrap())
         }
-        _ => return Truth::Unknown,
+        (DateTimeValue::Date(left), DateTimeValue::TimestampTz(right)) => {
+            let timezone =
+                timezone.ok_or(Error::DateTimeTimezoneRequired("date", "timestamptz"))?;
+            let left = timezone
+                .from_local_datetime(&left.and_hms_opt(0, 0, 0).unwrap())
+                .single()
+                .unwrap();
+            compare_ord(op, &left, right)
+        }
+        (DateTimeValue::TimestampTz(left), DateTimeValue::Date(right)) => {
+            let timezone =
+                timezone.ok_or(Error::DateTimeTimezoneRequired("date", "timestamptz"))?;
+            let right = timezone
+                .from_local_datetime(&right.and_hms_opt(0, 0, 0).unwrap())
+                .single()
+                .unwrap();
+            compare_ord(op, left, &right)
+        }
+        (DateTimeValue::Timestamp(left), DateTimeValue::TimestampTz(right)) => {
+            let timezone =
+                timezone.ok_or(Error::DateTimeTimezoneRequired("timestamp", "timestamptz"))?;
+            let left = timezone.from_local_datetime(left).single().unwrap();
+            compare_ord(op, &left, right)
+        }
+        (DateTimeValue::TimestampTz(left), DateTimeValue::Timestamp(right)) => {
+            let timezone =
+                timezone.ok_or(Error::DateTimeTimezoneRequired("timestamp", "timestamptz"))?;
+            let right = timezone.from_local_datetime(right).single().unwrap();
+            compare_ord(op, left, &right)
+        }
+        (DateTimeValue::Time(left), DateTimeValue::TimeTz(right, right_offset)) => {
+            let timezone = timezone.ok_or(Error::DateTimeTimezoneRequired("time", "timetz"))?;
+            compare_ord(
+                op,
+                &time_tz_key(left, &timezone),
+                &time_tz_key(right, right_offset),
+            )
+        }
+        (DateTimeValue::TimeTz(left, left_offset), DateTimeValue::Time(right)) => {
+            let timezone = timezone.ok_or(Error::DateTimeTimezoneRequired("time", "timetz"))?;
+            compare_ord(
+                op,
+                &time_tz_key(left, left_offset),
+                &time_tz_key(right, &timezone),
+            )
+        }
+        _ => return Ok(Truth::Unknown),
     };
-    result.into()
+    Ok(result.into())
+}
+
+fn time_tz_key(time: &NaiveTime, offset: &FixedOffset) -> (i64, i32) {
+    let utc_nanoseconds = time.num_seconds_from_midnight() as i64 * 1_000_000_000
+        + time.nanosecond() as i64
+        - offset.local_minus_utc() as i64 * 1_000_000_000;
+    (utc_nanoseconds, -offset.local_minus_utc())
 }
 
 fn eval_compare_json<T: Json>(
