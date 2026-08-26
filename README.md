@@ -65,6 +65,17 @@ See [PostgreSQL documentation](https://www.postgresql.org/docs/16/functions-json
     - [x] `.ceiling()`
     - [x] `.floor()`
     - [x] `.abs()`
+    - [x] `.bigint()`
+    - [x] `.decimal()`
+    - [x] `.integer()`
+    - [x] `.number()`
+    - [x] `.string()`
+    - [x] `.boolean()`
+    - [x] `.date()`
+    - [x] `.time()`
+    - [x] `.time_tz()`
+    - [x] `.timestamp()`
+    - [x] `.timestamp_tz()`
     - [ ] `.datetime()`
     - [ ] `.datetime(template)`
     - [x] `.keyvalue()`

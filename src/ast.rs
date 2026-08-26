@@ -224,6 +224,28 @@ pub enum Method {
     /// )
     /// ```
     Keyvalue,
+    /// `.bigint()` converts a string or numeric value to a 64-bit integer.
+    Bigint,
+    /// `.decimal()` converts a string or numeric value to a decimal number.
+    Decimal,
+    /// `.integer()` converts a string or numeric value to a 32-bit integer.
+    Integer,
+    /// `.number()` converts a string or numeric value to a number.
+    Number,
+    /// `.string()` converts a boolean, string, numeric, or datetime value to a string.
+    String,
+    /// `.boolean()` converts a boolean, string, or numeric value to a boolean.
+    Boolean,
+    /// `.date()` converts an ISO datetime string to a date.
+    Date,
+    /// `.time()` converts an ISO datetime string to a time without time zone.
+    Time,
+    /// `.time_tz()` converts an ISO datetime string to a time with time zone.
+    TimeTz,
+    /// `.timestamp()` converts an ISO datetime string to a timestamp without time zone.
+    Timestamp,
+    /// `.timestamp_tz()` converts an ISO datetime string to a timestamp with time zone.
+    TimestampTz,
 }
 
 impl PathPrimary {
@@ -497,6 +519,17 @@ impl Display for Method {
             Self::Floor => write!(f, "floor"),
             Self::Abs => write!(f, "abs"),
             Self::Keyvalue => write!(f, "keyvalue"),
+            Self::Bigint => write!(f, "bigint"),
+            Self::Decimal => write!(f, "decimal"),
+            Self::Integer => write!(f, "integer"),
+            Self::Number => write!(f, "number"),
+            Self::String => write!(f, "string"),
+            Self::Boolean => write!(f, "boolean"),
+            Self::Date => write!(f, "date"),
+            Self::Time => write!(f, "time"),
+            Self::TimeTz => write!(f, "time_tz"),
+            Self::Timestamp => write!(f, "timestamp"),
+            Self::TimestampTz => write!(f, "timestamp_tz"),
         }
     }
 }
