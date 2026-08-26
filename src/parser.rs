@@ -357,10 +357,23 @@ fn cmp_op(input: &str) -> IResult<&str, CompareOp> {
 }
 
 fn item_method(input: &str) -> IResult<&str, Method> {
-    delimited(
+    preceded(
         pair(char('.'), s),
-        method,
-        tuple((s, char('('), s, char(')'))),
+        alt((
+            map(
+                tuple((
+                    tag_no_case("datetime"),
+                    s,
+                    char('('),
+                    s,
+                    opt(string),
+                    s,
+                    char(')'),
+                )),
+                |(_, _, _, _, template, _, _)| Method::Datetime(template),
+            ),
+            terminated(method, tuple((s, char('('), s, char(')')))),
+        )),
     )(input)
 }
 

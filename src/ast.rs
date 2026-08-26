@@ -246,6 +246,9 @@ pub enum Method {
     Timestamp,
     /// `.timestamp_tz()` converts an ISO datetime string to a timestamp with time zone.
     TimestampTz,
+    /// `.datetime()` converts an ISO datetime string to a datetime value.
+    /// An optional PostgreSQL datetime template can be used for non-ISO input.
+    Datetime(Option<String>),
 }
 
 impl PathPrimary {
@@ -439,6 +442,9 @@ impl Display for AccessorOp {
                 write!(f, "]")
             }
             Self::FilterExpr(expr) => write!(f, "?({expr})"),
+            Self::Method(Method::Datetime(Some(template))) => {
+                write!(f, ".datetime({})", serde_json::to_string(template).unwrap())
+            }
             Self::Method(method) => write!(f, ".{method}()"),
         }
     }
@@ -530,6 +536,7 @@ impl Display for Method {
             Self::TimeTz => write!(f, "time_tz"),
             Self::Timestamp => write!(f, "timestamp"),
             Self::TimestampTz => write!(f, "timestamp_tz"),
+            Self::Datetime(_) => write!(f, "datetime"),
         }
     }
 }

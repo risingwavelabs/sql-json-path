@@ -14,7 +14,7 @@ chrono = "0.4"
 jsonbb = { version = "0.2", optional = true }
 nom = "7"
 regex = "1"
-serde_json = "1"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
 simd-json = { version = "0.16", optional = true }
 thiserror = "2"
 
