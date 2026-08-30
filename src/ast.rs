@@ -226,26 +226,42 @@ pub enum Method {
     Keyvalue,
     /// `.bigint()` converts a string or numeric value to a 64-bit integer.
     Bigint,
-    /// `.decimal()` converts a string or numeric value to a decimal number.
-    Decimal,
+    /// `.decimal([precision, scale])` converts a string or numeric value to a decimal number.
+    Decimal(Option<(i64, i64)>),
     /// `.integer()` converts a string or numeric value to a 32-bit integer.
     Integer,
     /// `.number()` converts a string or numeric value to a number.
     Number,
     /// `.string()` converts a boolean, string, numeric, or datetime value to a string.
     String,
+    /// `.ltrim([characters])` removes leading characters from a string.
+    Ltrim(Option<String>),
+    /// `.rtrim([characters])` removes trailing characters from a string.
+    Rtrim(Option<String>),
+    /// `.btrim([characters])` removes leading and trailing characters from a string.
+    Btrim(Option<String>),
+    /// `.lower()` lowercases a string.
+    Lower,
+    /// `.upper()` uppercases a string.
+    Upper,
+    /// `.initcap()` title-cases words in a string.
+    Initcap,
+    /// `.replace(from, to)` replaces substrings in a string.
+    Replace(String, String),
+    /// `.split_part(delimiter, field)` extracts a field from a string.
+    SplitPart(String, i64),
     /// `.boolean()` converts a boolean, string, or numeric value to a boolean.
     Boolean,
     /// `.date()` converts an ISO datetime string to a date.
     Date,
     /// `.time()` converts an ISO datetime string to a time without time zone.
-    Time,
+    Time(Option<i64>),
     /// `.time_tz()` converts an ISO datetime string to a time with time zone.
-    TimeTz,
+    TimeTz(Option<i64>),
     /// `.timestamp()` converts an ISO datetime string to a timestamp without time zone.
-    Timestamp,
+    Timestamp(Option<i64>),
     /// `.timestamp_tz()` converts an ISO datetime string to a timestamp with time zone.
-    TimestampTz,
+    TimestampTz(Option<i64>),
     /// `.datetime()` converts an ISO datetime string to a datetime value.
     /// An optional PostgreSQL datetime template can be used for non-ISO input.
     Datetime(Option<String>),
@@ -442,10 +458,7 @@ impl Display for AccessorOp {
                 write!(f, "]")
             }
             Self::FilterExpr(expr) => write!(f, "?({expr})"),
-            Self::Method(Method::Datetime(Some(template))) => {
-                write!(f, ".datetime({})", serde_json::to_string(template).unwrap())
-            }
-            Self::Method(method) => write!(f, ".{method}()"),
+            Self::Method(method) => write!(f, ".{method}"),
         }
     }
 }
@@ -518,26 +531,71 @@ impl Display for BinaryOp {
 impl Display for Method {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Type => write!(f, "type"),
-            Self::Size => write!(f, "size"),
-            Self::Double => write!(f, "double"),
-            Self::Ceiling => write!(f, "ceiling"),
-            Self::Floor => write!(f, "floor"),
-            Self::Abs => write!(f, "abs"),
-            Self::Keyvalue => write!(f, "keyvalue"),
-            Self::Bigint => write!(f, "bigint"),
-            Self::Decimal => write!(f, "decimal"),
-            Self::Integer => write!(f, "integer"),
-            Self::Number => write!(f, "number"),
-            Self::String => write!(f, "string"),
-            Self::Boolean => write!(f, "boolean"),
-            Self::Date => write!(f, "date"),
-            Self::Time => write!(f, "time"),
-            Self::TimeTz => write!(f, "time_tz"),
-            Self::Timestamp => write!(f, "timestamp"),
-            Self::TimestampTz => write!(f, "timestamp_tz"),
-            Self::Datetime(_) => write!(f, "datetime"),
+            Self::Type => write!(f, "type()"),
+            Self::Size => write!(f, "size()"),
+            Self::Double => write!(f, "double()"),
+            Self::Ceiling => write!(f, "ceiling()"),
+            Self::Floor => write!(f, "floor()"),
+            Self::Abs => write!(f, "abs()"),
+            Self::Keyvalue => write!(f, "keyvalue()"),
+            Self::Bigint => write!(f, "bigint()"),
+            Self::Decimal(None) => write!(f, "decimal()"),
+            Self::Decimal(Some((precision, scale))) => {
+                write!(f, "decimal({precision}, {scale})")
+            }
+            Self::Integer => write!(f, "integer()"),
+            Self::Number => write!(f, "number()"),
+            Self::String => write!(f, "string()"),
+            Self::Ltrim(chars) => write_string_arg_method(f, "ltrim", chars.as_deref()),
+            Self::Rtrim(chars) => write_string_arg_method(f, "rtrim", chars.as_deref()),
+            Self::Btrim(chars) => write_string_arg_method(f, "btrim", chars.as_deref()),
+            Self::Lower => write!(f, "lower()"),
+            Self::Upper => write!(f, "upper()"),
+            Self::Initcap => write!(f, "initcap()"),
+            Self::Replace(from, to) => write!(
+                f,
+                "replace({}, {})",
+                serde_json::to_string(from).unwrap(),
+                serde_json::to_string(to).unwrap()
+            ),
+            Self::SplitPart(delimiter, field) => write!(
+                f,
+                "split_part({}, {field})",
+                serde_json::to_string(delimiter).unwrap()
+            ),
+            Self::Boolean => write!(f, "boolean()"),
+            Self::Date => write!(f, "date()"),
+            Self::Time(precision) => write_precision_method(f, "time", *precision),
+            Self::TimeTz(precision) => write_precision_method(f, "time_tz", *precision),
+            Self::Timestamp(precision) => write_precision_method(f, "timestamp", *precision),
+            Self::TimestampTz(precision) => write_precision_method(f, "timestamp_tz", *precision),
+            Self::Datetime(None) => write!(f, "datetime()"),
+            Self::Datetime(Some(template)) => {
+                write!(f, "datetime({})", serde_json::to_string(template).unwrap())
+            }
         }
+    }
+}
+
+fn write_string_arg_method(
+    f: &mut Formatter<'_>,
+    name: &str,
+    chars: Option<&str>,
+) -> std::fmt::Result {
+    match chars {
+        Some(chars) => write!(f, "{name}({})", serde_json::to_string(chars).unwrap()),
+        None => write!(f, "{name}()"),
+    }
+}
+
+fn write_precision_method(
+    f: &mut Formatter<'_>,
+    name: &str,
+    precision: Option<i64>,
+) -> std::fmt::Result {
+    match precision {
+        Some(precision) => write!(f, "{name}({precision})"),
+        None => write!(f, "{name}()"),
     }
 }
 

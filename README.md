@@ -66,23 +66,27 @@ See [PostgreSQL documentation](https://www.postgresql.org/docs/16/functions-json
     - [x] `.floor()`
     - [x] `.abs()`
     - [x] `.bigint()`
-    - [x] `.decimal()`
+    - [x] `.decimal([precision, scale])`
     - [x] `.integer()`
     - [x] `.number()`
     - [x] `.string()`
+    - [x] `.ltrim([characters])`, `.rtrim([characters])`, `.btrim([characters])`
+    - [x] `.lower()`, `.upper()`, `.initcap()`
+    - [x] `.replace(from, to)`
+    - [x] `.split_part(delimiter, field)`
     - [x] `.boolean()`
     - [x] `.date()`
-    - [x] `.time()`
-    - [x] `.time_tz()`
-    - [x] `.timestamp()`
-    - [x] `.timestamp_tz()`
+    - [x] `.time([precision])`
+    - [x] `.time_tz([precision])`
+    - [x] `.timestamp([precision])`
+    - [x] `.timestamp_tz([precision])`
     - [x] `.datetime()`
     - [x] `.datetime(template)`
     - [x] `.keyvalue()`
 
 ## Testing
 
-This crate is tested against [PostgreSQL regression tests](tests/jsonb_jsonpath.out): `cargo test --test pg_jsonb_jsonpath`. 421 out of 430 tests are passed. The remaining 9 tests are skipped: 1 exceeds the datetime range supported by `chrono`, and 8 cover known differences from PostgreSQL.
+This crate is tested against [PostgreSQL regression tests](tests/jsonb_jsonpath.out): `cargo test --test pg_jsonb_jsonpath`. 905 out of 916 tests are passed. The remaining 11 tests are skipped: 3 require SQL constructs outside the regression adapter, 1 exceeds the datetime range supported by `chrono`, and 7 cover known differences from PostgreSQL.
 
 ## License
 

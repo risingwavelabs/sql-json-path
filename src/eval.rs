@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike};
+use bigdecimal::{BigDecimal, RoundingMode};
+use chrono::{
+    DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike,
+};
 use serde_json::Number;
+use std::str::FromStr;
 
 use crate::{
     ast::*,
@@ -45,14 +49,27 @@ impl DateTimeValue {
     fn to_iso_string(&self) -> String {
         match self {
             Self::Date(value) => value.format("%Y-%m-%d").to_string(),
-            Self::Time(value) => value.format("%H:%M:%S%.f").to_string(),
-            Self::TimeTz(value, offset) => {
-                format!("{}{}", value.format("%H:%M:%S%.f"), offset)
-            }
-            Self::Timestamp(value) => value.format("%Y-%m-%dT%H:%M:%S%.f").to_string(),
-            Self::TimestampTz(value) => value.format("%Y-%m-%dT%H:%M:%S%.f%:z").to_string(),
+            Self::Time(value) => format_time(*value),
+            Self::TimeTz(value, offset) => format!("{}{}", format_time(*value), offset),
+            Self::Timestamp(value) => format!("{}T{}", value.date(), format_time(value.time())),
+            Self::TimestampTz(value) => format!(
+                "{}T{}{}",
+                value.date_naive(),
+                format_time(value.time()),
+                value.offset()
+            ),
         }
     }
+}
+
+fn format_time(value: NaiveTime) -> String {
+    let mut output = value.format("%H:%M:%S").to_string();
+    if value.nanosecond() != 0 {
+        let fraction = format!("{:09}", value.nanosecond());
+        output.push('.');
+        output.push_str(fraction.trim_end_matches('0'));
+    }
+    output
 }
 
 #[derive(Debug)]
@@ -152,20 +169,32 @@ pub enum Error {
     SizeNotArray,
     #[error("jsonpath item method .double() can only be applied to a string or numeric value")]
     DoubleTypeError,
-    #[error("numeric argument of jsonpath item method .double() is out of range for type double precision")]
-    DoubleOutOfRange,
-    #[error("string argument of jsonpath item method .double() is not a valid representation of a double precision number")]
-    InvalidDouble,
     #[error("jsonpath item method .keyvalue() can only be applied to an object")]
     KeyValueNotObject,
     #[error("jsonpath item method .{0}() can only be applied to a string or numeric value")]
     NumericConversionType(&'static str),
     #[error("argument \"{0}\" of jsonpath item method .{1}() is invalid for type {2}")]
     InvalidConversion(Box<str>, &'static str, &'static str),
+    #[error("NaN or Infinity is not allowed for jsonpath item method .{0}()")]
+    NonFiniteNumber(&'static str),
+    #[error("NUMERIC precision {0} must be between 1 and 1000")]
+    NumericPrecision(i64),
+    #[error("NUMERIC scale {0} must be between -1000 and 1000")]
+    NumericScale(i64),
+    #[error("{0} of jsonpath item method .decimal() is out of range for type integer")]
+    DecimalArgumentOutOfRange(&'static str),
     #[error("jsonpath item method .boolean() can only be applied to a boolean, string, or numeric value")]
     BooleanTypeError,
     #[error("jsonpath item method .string() can only be applied to a boolean, string, numeric, or datetime value")]
     StringTypeError,
+    #[error("jsonpath item method .{0}() can only be applied to a string")]
+    StringMethodTypeError(&'static str),
+    #[error("field position of jsonpath item method .split_part() must not be zero")]
+    SplitPartZero,
+    #[error(
+        "field position of jsonpath item method .split_part() is out of range for type integer"
+    )]
+    SplitPartOutOfRange,
     #[error("jsonpath item method .{0}() can only be applied to a string")]
     DateTimeTypeError(&'static str),
     #[error("{0} format is not recognized: \"{1}\"")]
@@ -182,6 +211,8 @@ pub enum Error {
     DateTimeInputTooShort,
     #[error("cannot convert value from {0} to {1} without time zone usage")]
     DateTimeTimezoneRequired(&'static str, &'static str),
+    #[error("time precision of jsonpath item method .{0}() is out of range for type integer")]
+    TimePrecisionOutOfRange(&'static str),
     #[error("division by zero")]
     DivisionByZero,
     #[error("single boolean result is expected")]
@@ -302,7 +333,8 @@ impl JsonPath {
             array: T::null(),
             mode: self.mode,
             first: false,
-            timezone: None,
+            timezone: FixedOffset::east_opt(0).unwrap(),
+            timezone_aware: false,
         }
         .eval_expr_or_predicate(&self.expr)
         .map(|set| set.into_iter().map(Item::into_json).collect())
@@ -324,7 +356,8 @@ impl JsonPath {
             array: T::null(),
             mode: self.mode,
             first: false,
-            timezone: None,
+            timezone: FixedOffset::east_opt(0).unwrap(),
+            timezone_aware: false,
         }
         .eval_expr_or_predicate(&self.expr)
         .map(|set| set.into_iter().map(Item::into_json).collect())
@@ -351,7 +384,8 @@ impl JsonPath {
             array: T::null(),
             mode: self.mode,
             first: false,
-            timezone: Some(timezone),
+            timezone,
+            timezone_aware: true,
         }
         .eval_expr_or_predicate(&self.expr)
         .map(|set| set.into_iter().map(Item::into_json).collect())
@@ -366,7 +400,8 @@ impl JsonPath {
             array: T::null(),
             mode: self.mode,
             first: true,
-            timezone: None,
+            timezone: FixedOffset::east_opt(0).unwrap(),
+            timezone_aware: false,
         }
         .eval_expr_or_predicate(&self.expr)
         .map(|set| set.into_iter().next().map(Item::into_json))
@@ -388,7 +423,56 @@ impl JsonPath {
             array: T::null(),
             mode: self.mode,
             first: true,
-            timezone: None,
+            timezone: FixedOffset::east_opt(0).unwrap(),
+            timezone_aware: false,
+        }
+        .eval_expr_or_predicate(&self.expr)
+        .map(|set| set.into_iter().next().map(Item::into_json))
+    }
+
+    /// Evaluate with a session time zone, without enabling `_tz` conversions.
+    pub fn query_with_vars_at_timezone<'a, T: JsonRef<'a>>(
+        &self,
+        value: T,
+        vars: T,
+        timezone: FixedOffset,
+    ) -> Result<Vec<Cow<'a, T::Owned>>> {
+        if !vars.is_object() {
+            return Err(Error::VarsNotObject);
+        }
+        Evaluator {
+            root: value,
+            current: ItemRef::Json(value),
+            vars,
+            array: T::null(),
+            mode: self.mode,
+            first: false,
+            timezone,
+            timezone_aware: false,
+        }
+        .eval_expr_or_predicate(&self.expr)
+        .map(|set| set.into_iter().map(Item::into_json).collect())
+    }
+
+    /// Evaluate the first result with a session time zone.
+    pub fn query_first_with_vars_at_timezone<'a, T: JsonRef<'a>>(
+        &self,
+        value: T,
+        vars: T,
+        timezone: FixedOffset,
+    ) -> Result<Option<Cow<'a, T::Owned>>> {
+        if !vars.is_object() {
+            return Err(Error::VarsNotObject);
+        }
+        Evaluator {
+            root: value,
+            current: ItemRef::Json(value),
+            vars,
+            array: T::null(),
+            mode: self.mode,
+            first: true,
+            timezone,
+            timezone_aware: false,
         }
         .eval_expr_or_predicate(&self.expr)
         .map(|set| set.into_iter().next().map(Item::into_json))
@@ -423,7 +507,9 @@ struct Evaluator<'a, T: Json + 'a> {
     /// Only return the first result.
     first: bool,
     /// Session time zone used by PostgreSQL-compatible `_tz` operations.
-    timezone: Option<FixedOffset>,
+    timezone: FixedOffset,
+    /// Whether conversions between values with and without time zones are allowed.
+    timezone_aware: bool,
 }
 
 /// Unwrap the result or return an empty result if the evaluator is in lax mode.
@@ -486,6 +572,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
             mode: self.mode,
             first: self.first,
             timezone: self.timezone,
+            timezone_aware: self.timezone_aware,
         }
     }
 
@@ -535,7 +622,8 @@ impl<'a, T: Json> Evaluator<'a, T> {
                 // Each SQL/JSON item in one SQL/JSON sequence is compared to each item in the other SQL/JSON sequence.
                 'product: for r in right.iter() {
                     for l in left.iter() {
-                        let res = eval_compare::<T>(*op, l.as_ref(), r.as_ref(), self.timezone)?;
+                        let timezone = self.timezone_aware.then_some(self.timezone);
+                        let res = eval_compare::<T>(*op, l.as_ref(), r.as_ref(), timezone)?;
                         result = result.merge(res);
                         // The predicate is Unknown if there any pair of SQL/JSON items in the cross product is not comparable.
                         // the predicate is True if any pair is comparable and satisfies the comparison operator.
@@ -741,7 +829,7 @@ impl<'a, T: Json> Evaluator<'a, T> {
         };
         let mut new_set = vec![];
         for v in set {
-            let object = lax!(self, v.as_object(), Error::WildcardMemberAccess);
+            let object = lax!(self, v.as_object(), Error::WildcardMemberAccess; continue);
             for v in object.list_value() {
                 new_set.push(Item::Json(Cow::Borrowed(v)));
             }
@@ -955,24 +1043,44 @@ impl<'a, T: Json> Evaluator<'a, T> {
             Method::Keyvalue => self.eval_method_keyvalue(),
             Method::Bigint => self.eval_method_integer::<i64>("bigint").map(|v| vec![v]),
             Method::Integer => self.eval_method_integer::<i32>("integer").map(|v| vec![v]),
-            Method::Decimal => self.eval_method_number("decimal").map(|v| vec![v]),
+            Method::Decimal(args) => self.eval_method_decimal(*args).map(|v| vec![v]),
             Method::Number => self.eval_method_number("number").map(|v| vec![v]),
             Method::String => self.eval_method_string().map(|v| vec![v]),
+            Method::Ltrim(chars) => self
+                .eval_method_trim("ltrim", chars.as_deref(), true, false)
+                .map(|v| vec![v]),
+            Method::Rtrim(chars) => self
+                .eval_method_trim("rtrim", chars.as_deref(), false, true)
+                .map(|v| vec![v]),
+            Method::Btrim(chars) => self
+                .eval_method_trim("btrim", chars.as_deref(), true, true)
+                .map(|v| vec![v]),
+            Method::Lower => self
+                .eval_method_string_map("lower", str::to_lowercase)
+                .map(|v| vec![v]),
+            Method::Upper => self
+                .eval_method_string_map("upper", str::to_uppercase)
+                .map(|v| vec![v]),
+            Method::Initcap => self.eval_method_initcap().map(|v| vec![v]),
+            Method::Replace(from, to) => self.eval_method_replace(from, to).map(|v| vec![v]),
+            Method::SplitPart(delimiter, field) => self
+                .eval_method_split_part(delimiter, *field)
+                .map(|v| vec![v]),
             Method::Boolean => self.eval_method_boolean().map(|v| vec![v]),
             Method::Date => self
-                .eval_method_datetime("date", DateTimeKind::Date)
+                .eval_method_datetime("date", DateTimeKind::Date, None)
                 .map(|v| vec![v]),
-            Method::Time => self
-                .eval_method_datetime("time", DateTimeKind::Time)
+            Method::Time(precision) => self
+                .eval_method_datetime("time", DateTimeKind::Time, *precision)
                 .map(|v| vec![v]),
-            Method::TimeTz => self
-                .eval_method_datetime("time_tz", DateTimeKind::TimeTz)
+            Method::TimeTz(precision) => self
+                .eval_method_datetime("time_tz", DateTimeKind::TimeTz, *precision)
                 .map(|v| vec![v]),
-            Method::Timestamp => self
-                .eval_method_datetime("timestamp", DateTimeKind::Timestamp)
+            Method::Timestamp(precision) => self
+                .eval_method_datetime("timestamp", DateTimeKind::Timestamp, *precision)
                 .map(|v| vec![v]),
-            Method::TimestampTz => self
-                .eval_method_datetime("timestamp_tz", DateTimeKind::TimestampTz)
+            Method::TimestampTz(precision) => self
+                .eval_method_datetime("timestamp_tz", DateTimeKind::TimestampTz, *precision)
                 .map(|v| vec![v]),
             Method::Datetime(template) => self
                 .eval_method_generic_datetime(template.as_deref())
@@ -1010,15 +1118,29 @@ impl<'a, T: Json> Evaluator<'a, T> {
     fn eval_method_double(&self) -> Result<Item<'a, T>> {
         let current = self.current.as_json().ok_or(Error::DoubleTypeError)?;
         if let Some(s) = current.as_str() {
-            let n = s.parse::<f64>().map_err(|_| Error::InvalidDouble)?;
+            let n = s.parse::<f64>().map_err(|_| {
+                if is_non_finite_literal(s) {
+                    Error::NonFiniteNumber("double")
+                } else {
+                    Error::InvalidConversion(s.into(), "double", "double precision")
+                }
+            })?;
             if n.is_infinite() || n.is_nan() {
-                return Err(Error::InvalidDouble);
+                return Err(Error::NonFiniteNumber("double"));
             }
             Ok(Item::Json(Cow::Owned(T::from_f64(n))))
         } else if let Some(number) = current.as_number() {
-            let value = number.as_f64().ok_or(Error::DoubleOutOfRange)?;
+            let display =
+                decimal_plain_string(&number.to_string()).unwrap_or_else(|| number.to_string());
+            let value = number.as_f64().ok_or_else(|| {
+                Error::InvalidConversion(display.clone().into(), "double", "double precision")
+            })?;
             if !value.is_finite() {
-                return Err(Error::DoubleOutOfRange);
+                return Err(Error::InvalidConversion(
+                    display.into(),
+                    "double",
+                    "double precision",
+                ));
             }
             Ok(Item::Json(Cow::Owned(T::from_f64(value))))
         } else {
@@ -1082,8 +1204,9 @@ impl<'a, T: Json> Evaluator<'a, T> {
             .ok_or(Error::NumericConversionType(method))?;
         let display;
         let value = if let Some(number) = current.as_number() {
-            display = number.to_string();
-            number_to_i64(&number)
+            display =
+                decimal_plain_string(&number.to_string()).unwrap_or_else(|| number.to_string());
+            round_decimal_to_i64(&display)
                 .and_then(|value| I::try_from(value).ok())
                 .ok_or_else(|| Error::InvalidConversion(display.clone().into(), method, method))?
         } else if let Some(string) = current.as_str() {
@@ -1103,16 +1226,53 @@ impl<'a, T: Json> Evaluator<'a, T> {
             .current
             .as_json()
             .ok_or(Error::NumericConversionType(method))?;
-        if current.is_number() {
-            return Ok(Item::Json(Cow::Borrowed(current)));
+        let input = if let Some(number) = current.as_number() {
+            number.to_string()
+        } else {
+            current
+                .as_str()
+                .ok_or(Error::NumericConversionType(method))?
+                .to_owned()
+        };
+        if is_non_finite_literal(&input) {
+            return Err(Error::NonFiniteNumber(method));
         }
-        let string = current
-            .as_str()
-            .ok_or(Error::NumericConversionType(method))?;
-        let normalized = string.trim().strip_prefix('+').unwrap_or(string.trim());
-        let number = normalized
-            .parse::<Number>()
-            .map_err(|_| Error::InvalidConversion(string.into(), method, "numeric"))?;
+        let normalized = decimal_plain_string(&input)
+            .ok_or_else(|| Error::InvalidConversion(input.clone().into(), method, "numeric"))?;
+        let number = Number::from_str(&normalized)
+            .map_err(|_| Error::InvalidConversion(input.into(), method, "numeric"))?;
+        Ok(Item::Json(Cow::Owned(T::from_number(number))))
+    }
+
+    fn eval_method_decimal(&self, args: Option<(i64, i64)>) -> Result<Item<'a, T>> {
+        let item = self.eval_method_number("decimal")?;
+        let Some((precision, scale)) = args else {
+            return Ok(item);
+        };
+        let precision = i32::try_from(precision)
+            .map_err(|_| Error::DecimalArgumentOutOfRange("precision"))?
+            as i64;
+        let scale =
+            i32::try_from(scale).map_err(|_| Error::DecimalArgumentOutOfRange("scale"))? as i64;
+        if !(1..=1000).contains(&precision) {
+            return Err(Error::NumericPrecision(precision));
+        }
+        if !(-1000..=1000).contains(&scale) {
+            return Err(Error::NumericScale(scale));
+        }
+        let number = item.as_ref().as_json().unwrap().as_number().unwrap();
+        let input = decimal_plain_string(&number.to_string()).unwrap();
+        let decimal = BigDecimal::from_str(&input).unwrap();
+        let rounded = decimal.with_scale_round(scale, RoundingMode::HalfUp);
+        let output = if rounded == 0 {
+            "0".to_owned()
+        } else {
+            rounded.to_plain_string()
+        };
+        if decimal_precision(&output) > precision as usize {
+            return Err(Error::InvalidConversion(input.into(), "decimal", "numeric"));
+        }
+        let number = Number::from_str(&trim_decimal_zeros(&output)).unwrap();
         Ok(Item::Json(Cow::Owned(T::from_number(number))))
     }
 
@@ -1121,8 +1281,9 @@ impl<'a, T: Json> Evaluator<'a, T> {
         let value = if let Some(value) = current.as_bool() {
             value
         } else if let Some(number) = current.as_number() {
-            let display = number.to_string();
-            let value = number_to_i64(&number)
+            let display =
+                decimal_plain_string(&number.to_string()).unwrap_or_else(|| number.to_string());
+            let value = decimal_to_i64(&display)
                 .and_then(|value| i32::try_from(value).ok())
                 .ok_or_else(|| Error::InvalidConversion(display.into(), "boolean", "boolean"))?;
             value != 0
@@ -1153,18 +1314,132 @@ impl<'a, T: Json> Evaluator<'a, T> {
         Ok(Item::Json(Cow::Owned(T::from_string(&value))))
     }
 
+    fn eval_method_string_map(
+        &self,
+        method: &'static str,
+        map: impl FnOnce(&str) -> String,
+    ) -> Result<Item<'a, T>> {
+        let value = self
+            .current
+            .as_json()
+            .and_then(JsonRef::as_str)
+            .ok_or(Error::StringMethodTypeError(method))?;
+        Ok(Item::Json(Cow::Owned(T::from_string(&map(value)))))
+    }
+
+    fn eval_method_trim(
+        &self,
+        method: &'static str,
+        chars: Option<&str>,
+        left: bool,
+        right: bool,
+    ) -> Result<Item<'a, T>> {
+        let value = self
+            .current
+            .as_json()
+            .and_then(JsonRef::as_str)
+            .ok_or(Error::StringMethodTypeError(method))?;
+        let chars = chars.unwrap_or(" ");
+        let value = match (left, right) {
+            (true, true) => value.trim_matches(|ch| chars.contains(ch)),
+            (true, false) => value.trim_start_matches(|ch| chars.contains(ch)),
+            (false, true) => value.trim_end_matches(|ch| chars.contains(ch)),
+            _ => value,
+        };
+        Ok(Item::Json(Cow::Owned(T::from_string(value))))
+    }
+
+    fn eval_method_initcap(&self) -> Result<Item<'a, T>> {
+        let value = self
+            .current
+            .as_json()
+            .and_then(JsonRef::as_str)
+            .ok_or(Error::StringMethodTypeError("initcap"))?;
+        let mut capitalize = true;
+        let mut output = String::with_capacity(value.len());
+        for ch in value.chars() {
+            if ch.is_alphanumeric() {
+                if capitalize {
+                    output.extend(ch.to_uppercase());
+                    capitalize = false;
+                } else {
+                    output.extend(ch.to_lowercase());
+                }
+            } else {
+                output.push(ch);
+                capitalize = true;
+            }
+        }
+        Ok(Item::Json(Cow::Owned(T::from_string(&output))))
+    }
+
+    fn eval_method_replace(&self, from: &str, to: &str) -> Result<Item<'a, T>> {
+        let value = self
+            .current
+            .as_json()
+            .and_then(JsonRef::as_str)
+            .ok_or(Error::StringMethodTypeError("replace"))?;
+        Ok(Item::Json(Cow::Owned(T::from_string(
+            &value.replace(from, to),
+        ))))
+    }
+
+    fn eval_method_split_part(&self, delimiter: &str, field: i64) -> Result<Item<'a, T>> {
+        let value = self
+            .current
+            .as_json()
+            .and_then(JsonRef::as_str)
+            .ok_or(Error::StringMethodTypeError("split_part"))?;
+        let field: i32 = field.try_into().map_err(|_| Error::SplitPartOutOfRange)?;
+        if field == 0 {
+            return Err(Error::SplitPartZero);
+        }
+        let parts: Vec<_> = value.split(delimiter).collect();
+        let index = if field > 0 {
+            field as isize - 1
+        } else {
+            parts.len() as isize + field as isize
+        };
+        let part = usize::try_from(index)
+            .ok()
+            .and_then(|index| parts.get(index))
+            .copied()
+            .unwrap_or("");
+        Ok(Item::Json(Cow::Owned(T::from_string(part))))
+    }
+
     fn eval_method_datetime(
         &self,
         method: &'static str,
         kind: DateTimeKind,
+        precision: Option<i64>,
     ) -> Result<Item<'a, T>> {
         let string = self
             .current
             .as_json()
             .and_then(JsonRef::as_str)
             .ok_or(Error::DateTimeTypeError(method))?;
-        let value = parse_datetime(string, kind)
-            .ok_or_else(|| Error::InvalidDateTime(method, string.into()))?;
+        let precision = match precision {
+            Some(value) => Some(
+                u32::try_from(value)
+                    .map_err(|_| Error::TimePrecisionOutOfRange(method))?
+                    .min(6),
+            ),
+            None => None,
+        };
+        let value = convert_datetime(
+            parse_iso_datetime(string)
+                .ok_or_else(|| Error::InvalidDateTime(method, string.into()))?,
+            kind,
+            self.timezone,
+            self.timezone_aware,
+            method,
+            string,
+        )?;
+        let value = match precision {
+            Some(precision) => round_datetime(value, precision),
+            None => value,
+        };
         Ok(Item::DateTime(value))
     }
 
@@ -1419,34 +1694,130 @@ fn parse_datetime_template(input: &str, template: &str) -> Result<DateTimeValue>
     }
 }
 
-fn parse_datetime(input: &str, kind: DateTimeKind) -> Option<DateTimeValue> {
-    let parsed = parse_iso_datetime(input)?;
+fn convert_datetime(
+    parsed: ParsedDateTime,
+    kind: DateTimeKind,
+    timezone: FixedOffset,
+    timezone_aware: bool,
+    method: &'static str,
+    input: &str,
+) -> Result<DateTimeValue> {
     match (kind, parsed) {
-        (DateTimeKind::Date, ParsedDateTime::Date(value)) => Some(DateTimeValue::Date(value)),
+        (DateTimeKind::Date, ParsedDateTime::Date(value)) => Ok(DateTimeValue::Date(value)),
         (DateTimeKind::Date, ParsedDateTime::Timestamp(value)) => {
-            Some(DateTimeValue::Date(value.date()))
+            Ok(DateTimeValue::Date(value.date()))
         }
-        (DateTimeKind::Time, ParsedDateTime::Time(value)) => Some(DateTimeValue::Time(value)),
+        (DateTimeKind::Date, ParsedDateTime::TimestampTz(value)) => {
+            if !timezone_aware {
+                return Err(Error::DateTimeTimezoneRequired("timestamptz", "date"));
+            }
+            Ok(DateTimeValue::Date(
+                value.with_timezone(&timezone).date_naive(),
+            ))
+        }
+        (DateTimeKind::Time, ParsedDateTime::Time(value)) => Ok(DateTimeValue::Time(value)),
         (DateTimeKind::Time, ParsedDateTime::Timestamp(value)) => {
-            Some(DateTimeValue::Time(value.time()))
+            Ok(DateTimeValue::Time(value.time()))
+        }
+        (DateTimeKind::Time, ParsedDateTime::TimeTz(value, _)) => {
+            if !timezone_aware {
+                return Err(Error::DateTimeTimezoneRequired("timetz", "time"));
+            }
+            Ok(DateTimeValue::Time(value))
+        }
+        (DateTimeKind::Time, ParsedDateTime::TimestampTz(value)) => {
+            if !timezone_aware {
+                return Err(Error::DateTimeTimezoneRequired("timestamptz", "time"));
+            }
+            Ok(DateTimeValue::Time(value.with_timezone(&timezone).time()))
         }
         (DateTimeKind::TimeTz, ParsedDateTime::TimeTz(value, offset)) => {
-            Some(DateTimeValue::TimeTz(value, offset))
+            Ok(DateTimeValue::TimeTz(value, offset))
         }
         (DateTimeKind::TimeTz, ParsedDateTime::TimestampTz(value)) => {
-            Some(DateTimeValue::TimeTz(value.time(), *value.offset()))
+            let value = value.with_timezone(&timezone);
+            Ok(DateTimeValue::TimeTz(value.time(), timezone))
         }
-        (DateTimeKind::Timestamp, ParsedDateTime::Date(value)) => Some(DateTimeValue::Timestamp(
+        (DateTimeKind::TimeTz, ParsedDateTime::Time(value)) => {
+            if !timezone_aware {
+                return Err(Error::DateTimeTimezoneRequired("time", "timetz"));
+            }
+            Ok(DateTimeValue::TimeTz(value, timezone))
+        }
+        (DateTimeKind::Timestamp, ParsedDateTime::Date(value)) => Ok(DateTimeValue::Timestamp(
             value.and_hms_opt(0, 0, 0).unwrap(),
         )),
         (DateTimeKind::Timestamp, ParsedDateTime::Timestamp(value)) => {
-            Some(DateTimeValue::Timestamp(value))
+            Ok(DateTimeValue::Timestamp(value))
+        }
+        (DateTimeKind::Timestamp, ParsedDateTime::TimestampTz(value)) => {
+            if !timezone_aware {
+                return Err(Error::DateTimeTimezoneRequired("timestamptz", "timestamp"));
+            }
+            Ok(DateTimeValue::Timestamp(
+                value.with_timezone(&timezone).naive_local(),
+            ))
         }
         (DateTimeKind::TimestampTz, ParsedDateTime::TimestampTz(value)) => {
-            Some(DateTimeValue::TimestampTz(value))
+            Ok(DateTimeValue::TimestampTz(value))
         }
-        _ => None,
+        (DateTimeKind::TimestampTz, ParsedDateTime::Date(value)) => {
+            if !timezone_aware {
+                return Err(Error::DateTimeTimezoneRequired("date", "timestamptz"));
+            }
+            Ok(DateTimeValue::TimestampTz(
+                timezone
+                    .from_local_datetime(&value.and_hms_opt(0, 0, 0).unwrap())
+                    .single()
+                    .unwrap(),
+            ))
+        }
+        (DateTimeKind::TimestampTz, ParsedDateTime::Timestamp(value)) => {
+            if !timezone_aware {
+                return Err(Error::DateTimeTimezoneRequired("timestamp", "timestamptz"));
+            }
+            Ok(DateTimeValue::TimestampTz(
+                timezone.from_local_datetime(&value).single().unwrap(),
+            ))
+        }
+        _ => Err(Error::InvalidDateTime(method, input.into())),
     }
+}
+
+fn round_datetime(value: DateTimeValue, precision: u32) -> DateTimeValue {
+    let unit = 10_i64.pow(9 - precision.min(9));
+    match value {
+        DateTimeValue::Date(value) => DateTimeValue::Date(value),
+        DateTimeValue::Time(value) => DateTimeValue::Time(round_time(value, unit)),
+        DateTimeValue::TimeTz(value, offset) => {
+            DateTimeValue::TimeTz(round_time(value, unit), offset)
+        }
+        DateTimeValue::Timestamp(value) => DateTimeValue::Timestamp(round_timestamp(value, unit)),
+        DateTimeValue::TimestampTz(value) => {
+            let rounded = round_timestamp(value.naive_utc(), unit);
+            DateTimeValue::TimestampTz(DateTime::from_naive_utc_and_offset(
+                rounded,
+                *value.offset(),
+            ))
+        }
+    }
+}
+
+fn round_time(value: NaiveTime, unit: i64) -> NaiveTime {
+    let nanos =
+        value.num_seconds_from_midnight() as i64 * 1_000_000_000 + value.nanosecond() as i64;
+    let rounded = ((nanos + unit / 2) / unit * unit).rem_euclid(86_400_000_000_000);
+    NaiveTime::from_num_seconds_from_midnight_opt(
+        (rounded / 1_000_000_000) as u32,
+        (rounded % 1_000_000_000) as u32,
+    )
+    .unwrap()
+}
+
+fn round_timestamp(value: NaiveDateTime, unit: i64) -> NaiveDateTime {
+    let nanos = value.nanosecond() as i64;
+    let rounded = (nanos + unit / 2) / unit * unit;
+    value.with_nanosecond(0).unwrap() + Duration::nanoseconds(rounded)
 }
 
 fn parse_iso_datetime(input: &str) -> Option<ParsedDateTime> {
@@ -1484,6 +1855,9 @@ fn parse_naive_time(input: &str) -> Option<NaiveTime> {
 }
 
 fn split_time_zone(input: &str) -> Option<(&str, FixedOffset)> {
+    if let Some(value) = input.strip_suffix("EST") {
+        return Some((value.trim_end(), FixedOffset::west_opt(5 * 3600).unwrap()));
+    }
     if let Some(value) = input.strip_suffix(['Z', 'z']) {
         let value = value.trim_end();
         if value.contains(':') {
@@ -1515,19 +1889,59 @@ fn split_time_zone(input: &str) -> Option<(&str, FixedOffset)> {
     FixedOffset::east_opt(sign * (hour * 3600 + minute * 60)).map(|offset| (value, offset))
 }
 
-fn number_to_i64(number: &Number) -> Option<i64> {
-    if let Some(value) = number.as_i64() {
-        return Some(value);
+fn is_non_finite_literal(input: &str) -> bool {
+    matches!(
+        input.trim().to_ascii_lowercase().as_str(),
+        "nan" | "+nan" | "-nan" | "inf" | "+inf" | "-inf" | "infinity" | "+infinity" | "-infinity"
+    )
+}
+
+fn decimal_plain_string(input: &str) -> Option<String> {
+    BigDecimal::from_str(input.trim().strip_prefix('+').unwrap_or(input.trim()))
+        .ok()
+        .map(|value| value.to_plain_string())
+}
+
+fn trim_decimal_zeros(input: &str) -> String {
+    if matches!(input, "-0" | "+0") {
+        return "0".to_owned();
     }
-    if let Some(value) = number.as_u64() {
-        return value.try_into().ok();
+    if !input.contains('.') {
+        return input.to_owned();
     }
-    let value = number.as_f64()?.round();
-    if value.is_finite() && value >= i64::MIN as f64 && value < -(i64::MIN as f64) {
-        Some(value as i64)
-    } else {
-        None
+    let trimmed = input.trim_end_matches('0').trim_end_matches('.');
+    match trimmed {
+        "" | "-0" => "0".to_owned(),
+        _ => trimmed.to_owned(),
     }
+}
+
+fn decimal_precision(input: &str) -> usize {
+    let digits = input
+        .trim_start_matches(['+', '-'])
+        .chars()
+        .filter(|ch| *ch != '.')
+        .skip_while(|ch| *ch == '0')
+        .count();
+    digits.max(1)
+}
+
+fn round_decimal_to_i64(input: &str) -> Option<i64> {
+    BigDecimal::from_str(input)
+        .ok()?
+        .with_scale_round(0, RoundingMode::HalfUp)
+        .to_plain_string()
+        .parse()
+        .ok()
+}
+
+fn decimal_to_i64(input: &str) -> Option<i64> {
+    let decimal = BigDecimal::from_str(input).ok()?;
+    let integer = decimal.with_scale(0);
+    if integer != decimal {
+        return None;
+    }
+    integer.to_plain_string().parse().ok()
 }
 
 fn parse_boolean(input: &str) -> Option<bool> {

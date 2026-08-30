@@ -18,8 +18,8 @@ use crate::{ast::*, eval::NumberExt};
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_while, take_while1},
-    character::complete::{char, multispace0 as s, u32},
-    combinator::{cut, eof, map, opt, value, verify},
+    character::complete::{char, digit1, multispace0 as s, u32},
+    combinator::{cut, eof, map, map_res, opt, recognize, value, verify},
     error::context,
     multi::{fold_many0, many0, separated_list1},
     number::complete::double,
@@ -372,9 +372,110 @@ fn item_method(input: &str) -> IResult<&str, Method> {
                 )),
                 |(_, _, _, _, template, _, _)| Method::Datetime(template),
             ),
+            map(
+                tuple((
+                    tag_no_case("decimal"),
+                    s,
+                    char('('),
+                    s,
+                    opt(tuple((signed_i64, s, char(','), s, signed_i64))),
+                    s,
+                    char(')'),
+                )),
+                |(_, _, _, _, args, _, _)| {
+                    Method::Decimal(args.map(|(precision, _, _, _, scale)| (precision, scale)))
+                },
+            ),
+            map(
+                tuple((
+                    alt((
+                        tag_no_case("timestamp_tz"),
+                        tag_no_case("timestamp"),
+                        tag_no_case("time_tz"),
+                        tag_no_case("time"),
+                    )),
+                    s,
+                    char('('),
+                    s,
+                    opt(unsigned_i64),
+                    s,
+                    char(')'),
+                )),
+                |(name, _, _, _, precision, _, _)| match name.to_ascii_lowercase().as_str() {
+                    "time" => Method::Time(precision),
+                    "time_tz" => Method::TimeTz(precision),
+                    "timestamp" => Method::Timestamp(precision),
+                    "timestamp_tz" => Method::TimestampTz(precision),
+                    _ => unreachable!(),
+                },
+            ),
+            map(
+                tuple((
+                    alt((
+                        tag_no_case("ltrim"),
+                        tag_no_case("rtrim"),
+                        tag_no_case("btrim"),
+                    )),
+                    s,
+                    char('('),
+                    s,
+                    opt(string),
+                    s,
+                    char(')'),
+                )),
+                |(name, _, _, _, chars, _, _)| match name.to_ascii_lowercase().as_str() {
+                    "ltrim" => Method::Ltrim(chars),
+                    "rtrim" => Method::Rtrim(chars),
+                    "btrim" => Method::Btrim(chars),
+                    _ => unreachable!(),
+                },
+            ),
+            map(
+                tuple((
+                    tag_no_case("replace"),
+                    s,
+                    char('('),
+                    s,
+                    string,
+                    s,
+                    char(','),
+                    s,
+                    string,
+                    s,
+                    char(')'),
+                )),
+                |(_, _, _, _, from, _, _, _, to, _, _)| Method::Replace(from, to),
+            ),
+            map(
+                tuple((
+                    tag_no_case("split_part"),
+                    s,
+                    char('('),
+                    s,
+                    string,
+                    s,
+                    char(','),
+                    s,
+                    signed_i64,
+                    s,
+                    char(')'),
+                )),
+                |(_, _, _, _, delimiter, _, _, _, field, _, _)| Method::SplitPart(delimiter, field),
+            ),
             terminated(method, tuple((s, char('('), s, char(')')))),
         )),
     )(input)
+}
+
+fn signed_i64(input: &str) -> IResult<&str, i64> {
+    map_res(
+        recognize(pair(opt(alt((char('+'), char('-')))), digit1)),
+        str::parse,
+    )(input)
+}
+
+fn unsigned_i64(input: &str) -> IResult<&str, i64> {
+    map_res(digit1, str::parse)(input)
 }
 
 fn method(input: &str) -> IResult<&str, Method> {
@@ -387,16 +488,14 @@ fn method(input: &str) -> IResult<&str, Method> {
         value(Method::Abs, tag_no_case("abs")),
         value(Method::Keyvalue, tag_no_case("keyvalue")),
         value(Method::Bigint, tag_no_case("bigint")),
-        value(Method::Decimal, tag_no_case("decimal")),
         value(Method::Integer, tag_no_case("integer")),
         value(Method::Number, tag_no_case("number")),
         value(Method::String, tag_no_case("string")),
+        value(Method::Lower, tag_no_case("lower")),
+        value(Method::Upper, tag_no_case("upper")),
+        value(Method::Initcap, tag_no_case("initcap")),
         value(Method::Boolean, tag_no_case("boolean")),
         value(Method::Date, tag_no_case("date")),
-        value(Method::TimestampTz, tag_no_case("timestamp_tz")),
-        value(Method::Timestamp, tag_no_case("timestamp")),
-        value(Method::TimeTz, tag_no_case("time_tz")),
-        value(Method::Time, tag_no_case("time")),
     ))(input)
 }
 
