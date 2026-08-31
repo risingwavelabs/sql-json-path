@@ -23,8 +23,8 @@ use nom::{
     error::context,
     multi::{fold_many0, many0, separated_list1},
     number::complete::double,
-    sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
-    Err, Finish, IResult, Offset,
+    sequence::{delimited, pair, preceded, separated_pair, terminated},
+    Err, Finish, IResult, Offset, Parser,
 };
 use serde_json::Number;
 use std::str::FromStr;
@@ -80,21 +80,24 @@ fn json_path(input: &str) -> IResult<&str, JsonPath> {
     map(
         preceded(s, separated_pair(mode, s, expr_or_predicate_eof)),
         |(mode, expr)| JsonPath { mode, expr },
-    )(input)
+    )
+    .parse(input)
 }
 
 fn expr_or_predicate_eof(input: &str) -> IResult<&str, ExprOrPredicate> {
     alt((
         map(terminated(predicate, pair(s, eof)), ExprOrPredicate::Pred),
         map(terminated(expr, pair(s, eof)), ExprOrPredicate::Expr),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn expr_or_predicate(input: &str) -> IResult<&str, ExprOrPredicate> {
     alt((
         map(predicate, ExprOrPredicate::Pred),
         map(expr, ExprOrPredicate::Expr),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn mode(input: &str) -> IResult<&str, Mode> {
@@ -102,7 +105,8 @@ fn mode(input: &str) -> IResult<&str, Mode> {
         value(Mode::Strict, tag_no_case("strict")),
         value(Mode::Lax, tag_no_case("lax")),
         value(Mode::Lax, tag_no_case("")),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn predicate(input: &str) -> IResult<&str, Predicate> {
@@ -112,7 +116,8 @@ fn predicate(input: &str) -> IResult<&str, Predicate> {
         preceded(delimited(s, tag("||"), s), predicate1),
         move || first0.take().unwrap(),
         |acc, pred| Predicate::Or(Box::new(acc), Box::new(pred)),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn predicate1(input: &str) -> IResult<&str, Predicate> {
@@ -122,34 +127,35 @@ fn predicate1(input: &str) -> IResult<&str, Predicate> {
         preceded(delimited(s, tag("&&"), s), predicate2),
         move || first0.take().unwrap(),
         |acc, pred| Predicate::And(Box::new(acc), Box::new(pred)),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn predicate2(input: &str) -> IResult<&str, Predicate> {
     alt((
         map(
-            tuple((expr, delimited(s, cmp_op, s), expr)),
+            (expr, delimited(s, cmp_op, s), expr),
             |(left, op, right)| Predicate::Compare(op, Box::new(left), Box::new(right)),
         ),
         map(
             delimited(
                 pair(char('('), s),
                 predicate,
-                tuple((
+                (
                     s,
                     char(')'),
                     s,
                     tag_no_case("is"),
                     s,
                     tag_no_case("unknown"),
-                )),
+                ),
             ),
             |p| Predicate::IsUnknown(Box::new(p)),
         ),
         map(
             separated_pair(
                 expr,
-                tuple((s, tag_no_case("starts"), s, tag_no_case("with"), s)),
+                (s, tag_no_case("starts"), s, tag_no_case("with"), s),
                 starts_with_literal,
             ),
             |(expr, literal)| Predicate::StartsWith(Box::new(expr), literal),
@@ -159,14 +165,16 @@ fn predicate2(input: &str) -> IResult<&str, Predicate> {
             Predicate::Not(Box::new(p))
         }),
         delimited_predicate,
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn like_regex(input: &str) -> IResult<&str, Predicate> {
     let (rest, ((expr, pattern), flags)) = pair(
-        separated_pair(expr, tuple((s, tag_no_case("like_regex"), s)), string),
-        opt(preceded(tuple((s, tag_no_case("flag"), s)), string)),
-    )(input)?;
+        separated_pair(expr, (s, tag_no_case("like_regex"), s), string),
+        opt(preceded((s, tag_no_case("flag"), s), string)),
+    )
+    .parse(input)?;
     let regex = Regex::with_flags(&pattern, flags).map_err(|_| {
         Err::Failure(nom::error::Error::new(
             input,
@@ -182,13 +190,14 @@ fn delimited_predicate(input: &str) -> IResult<&str, Predicate> {
         delimited(pair(char('('), s), predicate, pair(s, char(')'))),
         map(
             delimited(
-                tuple((tag_no_case("exists"), s, char('('), s)),
+                (tag_no_case("exists"), s, char('('), s),
                 expr,
                 pair(s, char(')')),
             ),
             |expr| Predicate::Exists(Box::new(expr)),
         ),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn expr(input: &str) -> IResult<&str, Expr> {
@@ -202,7 +211,8 @@ fn expr(input: &str) -> IResult<&str, Expr> {
             '-' => Expr::BinaryOp(BinaryOp::Sub, Box::new(acc), Box::new(expr)),
             _ => unreachable!(),
         },
-    )(input)
+    )
+    .parse(input)
 }
 
 fn expr1(input: &str) -> IResult<&str, Expr> {
@@ -220,7 +230,8 @@ fn expr1(input: &str) -> IResult<&str, Expr> {
             '%' => Expr::BinaryOp(BinaryOp::Rem, Box::new(acc), Box::new(expr)),
             _ => unreachable!(),
         },
-    )(input)
+    )
+    .parse(input)
 }
 
 fn expr2(input: &str) -> IResult<&str, Expr> {
@@ -238,7 +249,8 @@ fn expr2(input: &str) -> IResult<&str, Expr> {
             }
             _ => Expr::UnaryOp(UnaryOp::Minus, Box::new(expr)),
         }),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn accessor_expr(input: &str) -> IResult<&str, Expr> {
@@ -251,7 +263,8 @@ fn accessor_expr(input: &str) -> IResult<&str, Expr> {
             }
             expr
         },
-    )(input)
+    )
+    .parse(input)
 }
 
 fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
@@ -264,7 +277,8 @@ fn path_primary(input: &str) -> IResult<&str, PathPrimary> {
             delimited(pair(char('('), s), expr_or_predicate, pair(s, char(')'))),
             |expr| PathPrimary::ExprOrPred(Box::new(expr)),
         ),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn accessor_op(input: &str) -> IResult<&str, AccessorOp> {
@@ -279,7 +293,8 @@ fn accessor_op(input: &str) -> IResult<&str, AccessorOp> {
         map(member_accessor, AccessorOp::Member),
         map(array_accessor, AccessorOp::Element),
         map(filter_expr, |expr| AccessorOp::FilterExpr(Box::new(expr))),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn level_range(input: &str) -> IResult<&str, LevelRange> {
@@ -303,19 +318,20 @@ fn level_range(input: &str) -> IResult<&str, LevelRange> {
             LevelRange::One,
         ),
         value(LevelRange::All, tag("")),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn level(input: &str) -> IResult<&str, Level> {
-    alt((value(Level::Last, tag_no_case("last")), map(u32, Level::N)))(input)
+    alt((value(Level::Last, tag_no_case("last")), map(u32, Level::N))).parse(input)
 }
 
 fn element_wildcard(input: &str) -> IResult<&str, ()> {
-    value((), tuple((char('['), s, char('*'), s, char(']'))))(input)
+    value((), (char('['), s, char('*'), s, char(']'))).parse(input)
 }
 
 fn member_accessor(input: &str) -> IResult<&str, String> {
-    preceded(pair(char('.'), s), alt((string, raw_string)))(input)
+    preceded(pair(char('.'), s), alt((string, raw_string))).parse(input)
 }
 
 fn array_accessor(input: &str) -> IResult<&str, Vec<ArrayIndex>> {
@@ -323,7 +339,8 @@ fn array_accessor(input: &str) -> IResult<&str, Vec<ArrayIndex>> {
         char('['),
         separated_list1(char(','), delimited(s, index_elem, s)),
         char(']'),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn index_elem(input: &str) -> IResult<&str, ArrayIndex> {
@@ -333,15 +350,12 @@ fn index_elem(input: &str) -> IResult<&str, ArrayIndex> {
             |(start, end)| ArrayIndex::Slice(start, end),
         ),
         map(expr, ArrayIndex::Index),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn filter_expr(input: &str) -> IResult<&str, Predicate> {
-    delimited(
-        tuple((char('?'), s, char('('), s)),
-        predicate,
-        tuple((s, char(')'))),
-    )(input)
+    delimited((char('?'), s, char('('), s), predicate, (s, char(')'))).parse(input)
 }
 
 fn cmp_op(input: &str) -> IResult<&str, CompareOp> {
@@ -353,7 +367,8 @@ fn cmp_op(input: &str) -> IResult<&str, CompareOp> {
         value(CompareOp::Lt, char('<')),
         value(CompareOp::Ge, tag(">=")),
         value(CompareOp::Gt, char('>')),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn item_method(input: &str) -> IResult<&str, Method> {
@@ -361,7 +376,7 @@ fn item_method(input: &str) -> IResult<&str, Method> {
         pair(char('.'), s),
         alt((
             map(
-                tuple((
+                (
                     tag_no_case("datetime"),
                     s,
                     char('('),
@@ -369,25 +384,25 @@ fn item_method(input: &str) -> IResult<&str, Method> {
                     opt(string),
                     s,
                     char(')'),
-                )),
+                ),
                 |(_, _, _, _, template, _, _)| Method::Datetime(template),
             ),
             map(
-                tuple((
+                (
                     tag_no_case("decimal"),
                     s,
                     char('('),
                     s,
-                    opt(tuple((signed_i64, s, char(','), s, signed_i64))),
+                    opt((signed_i64, s, char(','), s, signed_i64)),
                     s,
                     char(')'),
-                )),
+                ),
                 |(_, _, _, _, args, _, _)| {
                     Method::Decimal(args.map(|(precision, _, _, _, scale)| (precision, scale)))
                 },
             ),
             map(
-                tuple((
+                (
                     alt((
                         tag_no_case("timestamp_tz"),
                         tag_no_case("timestamp"),
@@ -400,7 +415,7 @@ fn item_method(input: &str) -> IResult<&str, Method> {
                     opt(unsigned_i64),
                     s,
                     char(')'),
-                )),
+                ),
                 |(name, _, _, _, precision, _, _)| match name.to_ascii_lowercase().as_str() {
                     "time" => Method::Time(precision),
                     "time_tz" => Method::TimeTz(precision),
@@ -410,7 +425,7 @@ fn item_method(input: &str) -> IResult<&str, Method> {
                 },
             ),
             map(
-                tuple((
+                (
                     alt((
                         tag_no_case("ltrim"),
                         tag_no_case("rtrim"),
@@ -422,7 +437,7 @@ fn item_method(input: &str) -> IResult<&str, Method> {
                     opt(string),
                     s,
                     char(')'),
-                )),
+                ),
                 |(name, _, _, _, chars, _, _)| match name.to_ascii_lowercase().as_str() {
                     "ltrim" => Method::Ltrim(chars),
                     "rtrim" => Method::Rtrim(chars),
@@ -431,7 +446,7 @@ fn item_method(input: &str) -> IResult<&str, Method> {
                 },
             ),
             map(
-                tuple((
+                (
                     tag_no_case("replace"),
                     s,
                     char('('),
@@ -443,11 +458,11 @@ fn item_method(input: &str) -> IResult<&str, Method> {
                     string,
                     s,
                     char(')'),
-                )),
+                ),
                 |(_, _, _, _, from, _, _, _, to, _, _)| Method::Replace(from, to),
             ),
             map(
-                tuple((
+                (
                     tag_no_case("split_part"),
                     s,
                     char('('),
@@ -459,23 +474,25 @@ fn item_method(input: &str) -> IResult<&str, Method> {
                     signed_i64,
                     s,
                     char(')'),
-                )),
+                ),
                 |(_, _, _, _, delimiter, _, _, _, field, _, _)| Method::SplitPart(delimiter, field),
             ),
-            terminated(method, tuple((s, char('('), s, char(')')))),
+            terminated(method, (s, char('('), s, char(')'))),
         )),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn signed_i64(input: &str) -> IResult<&str, i64> {
     map_res(
         recognize(pair(opt(alt((char('+'), char('-')))), digit1)),
         str::parse,
-    )(input)
+    )
+    .parse(input)
 }
 
 fn unsigned_i64(input: &str) -> IResult<&str, i64> {
-    map_res(digit1, str::parse)(input)
+    map_res(digit1, str::parse).parse(input)
 }
 
 fn method(input: &str) -> IResult<&str, Method> {
@@ -496,7 +513,8 @@ fn method(input: &str) -> IResult<&str, Method> {
         value(Method::Initcap, tag_no_case("initcap")),
         value(Method::Boolean, tag_no_case("boolean")),
         value(Method::Date, tag_no_case("date")),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn scalar_value(input: &str) -> IResult<&str, Value> {
@@ -507,7 +525,8 @@ fn scalar_value(input: &str) -> IResult<&str, Value> {
         map(number, Value::Number),
         map(string, Value::String),
         map(variable, Value::Variable),
-    ))(input)
+    ))
+    .parse(input)
 }
 
 fn number(input: &str) -> IResult<&str, Number> {
@@ -517,15 +536,16 @@ fn number(input: &str) -> IResult<&str, Number> {
         } else {
             Number::from_f64(v).unwrap()
         }
-    })(input)
+    })
+    .parse(input)
 }
 
 fn starts_with_literal(input: &str) -> IResult<&str, Value> {
-    alt((map(string, Value::String), map(variable, Value::Variable)))(input)
+    alt((map(string, Value::String), map(variable, Value::Variable))).parse(input)
 }
 
 fn variable(input: &str) -> IResult<&str, String> {
-    preceded(char('$'), raw_string)(input)
+    preceded(char('$'), raw_string).parse(input)
 }
 
 fn string(input: &str) -> IResult<&str, String> {
@@ -550,7 +570,8 @@ fn string(input: &str) -> IResult<&str, String> {
             ),
             cut(char('"')),
         ),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn escaped_char(input: &str) -> IResult<&str, char> {
@@ -570,14 +591,16 @@ fn escaped_char(input: &str) -> IResult<&str, char> {
                 // unicode_sequence,
             )),
         ),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn unescaped_str(input: &str) -> IResult<&str, &str> {
     context(
         "unescaped character",
         verify(take_while(is_valid_unescaped_char), |s: &str| !s.is_empty()),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn is_valid_unescaped_char(chr: char) -> bool {
@@ -593,7 +616,8 @@ fn raw_string(input: &str) -> IResult<&str, String> {
     map(
         take_while1(|c: char| c.is_ascii_alphanumeric() || c == '_' || c >= '\u{0080}'),
         String::from,
-    )(input)
+    )
+    .parse(input)
 }
 
 /// A visitor that checks if a JSON Path is valid.
