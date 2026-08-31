@@ -86,7 +86,7 @@ See [PostgreSQL documentation](https://www.postgresql.org/docs/16/functions-json
 
 ## Testing
 
-This crate is tested against [PostgreSQL regression tests](tests/jsonb_jsonpath.out): `cargo test --test pg_jsonb_jsonpath`. 905 out of 916 tests are passed. The remaining 11 tests are skipped: 3 require SQL constructs outside the regression adapter, 1 exceeds the datetime range supported by `chrono`, and 7 cover known differences from PostgreSQL.
+This crate is tested against [PostgreSQL regression tests](tests/jsonb_jsonpath.out): `cargo test --test pg_jsonb_jsonpath`. 905 out of 916 tests are passed. The remaining 11 tests are skipped: 3 require SQL constructs outside the regression adapter, 1 exceeds the datetime range supported by `chrono`, and 7 cover known differences from PostgreSQL. Run `cargo test --release --test pg_jsonb_jsonpath -- --bench --test-threads=1` to benchmark the supported cases.
 
 ## License
 

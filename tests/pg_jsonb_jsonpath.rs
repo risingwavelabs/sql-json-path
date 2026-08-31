@@ -16,9 +16,9 @@
 //! <https://github.com/postgres/postgres/blob/master/src/test/regress/expected/jsonb_jsonpath.out>
 
 use chrono::FixedOffset;
-use libtest_mimic::{Arguments, Failed, Trial};
+use libtest_mimic::{Arguments, Failed, Measurement, Trial};
 use sql_json_path::{EvalError, JsonPath};
-use std::str::FromStr;
+use std::{str::FromStr, time::Instant};
 
 fn main() {
     let args = Arguments::from_args();
@@ -93,9 +93,10 @@ fn parse_script(script: &'static str) -> Vec<Trial> {
         }
         if let Some(msg) = line.strip_prefix("ERROR:  ") {
             tests.push(
-                Trial::test(format!("jsonb_jsonpath.out:{}", line_no + 1), move || {
-                    test(&sql, Err(msg), timezone)
-                })
+                Trial::bench(
+                    format!("jsonb_jsonpath.out:{}", line_no + 1),
+                    move |test_mode| benchmark(test_mode, || test(&sql, Err(msg), timezone)),
+                )
                 .with_ignored_flag(ignored),
             );
             continue;
@@ -116,13 +117,54 @@ fn parse_script(script: &'static str) -> Vec<Trial> {
             }
         }
         tests.push(
-            Trial::test(format!("jsonb_jsonpath.out:{}", line_no + 1), move || {
-                test(&sql, Ok(results), timezone)
-            })
+            Trial::bench(
+                format!("jsonb_jsonpath.out:{}", line_no + 1),
+                move |test_mode| benchmark(test_mode, || test(&sql, Ok(results.clone()), timezone)),
+            )
             .with_ignored_flag(ignored),
         );
     }
     tests
+}
+
+fn benchmark(
+    test_mode: bool,
+    mut run_once: impl FnMut() -> Result<(), Failed>,
+) -> Result<Option<Measurement>, Failed> {
+    if test_mode {
+        run_once()?;
+        return Ok(None);
+    }
+
+    const SAMPLE_COUNT: usize = 10;
+    const TARGET_SAMPLE_NS: u128 = 1_000_000;
+    const MAX_ITERATIONS: u128 = 10_000;
+
+    let start = Instant::now();
+    run_once()?;
+    let warmup_ns = start.elapsed().as_nanos().max(1);
+    let iterations = (TARGET_SAMPLE_NS / warmup_ns).clamp(1, MAX_ITERATIONS) as u64;
+
+    let mut samples = Vec::with_capacity(SAMPLE_COUNT);
+    for _ in 0..SAMPLE_COUNT {
+        let start = Instant::now();
+        for _ in 0..iterations {
+            run_once()?;
+        }
+        samples.push(start.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+
+    let avg = samples.iter().sum::<f64>() / samples.len() as f64;
+    let variance = samples
+        .iter()
+        .map(|sample| (sample - avg).powi(2))
+        .sum::<f64>()
+        / samples.len() as f64;
+
+    Ok(Some(Measurement {
+        avg: avg.round() as u64,
+        variance: variance.sqrt().round() as u64,
+    }))
 }
 
 fn test(
