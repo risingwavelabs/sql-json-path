@@ -20,7 +20,7 @@ simd-json = { version = "0.16", optional = true }
 thiserror = "2"
 
 [dev-dependencies]
-libtest-mimic = "0.6"
+libtest-mimic = "0.8"
 
 [[test]]
 name = "pg_jsonb_jsonpath"

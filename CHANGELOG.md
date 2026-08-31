@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Support SQL/JSONPath 2023 numeric, string, boolean, and datetime item methods.
 - Add timezone-aware query APIs for PostgreSQL-compatible datetime comparisons.
-- Expand PostgreSQL JSONPath regression coverage, with 905 of 916 cases passing.
 
 ### Changed
 
