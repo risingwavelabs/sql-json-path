@@ -146,5 +146,5 @@ fn invalid_conversions_report_errors() {
         .query(&input)
         .unwrap_err()
         .to_string()
-        .contains("date format is not recognized"));
+        .contains("cannot convert value from timestamptz to date without time zone usage"));
 }

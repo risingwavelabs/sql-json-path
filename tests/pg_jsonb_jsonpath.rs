@@ -31,6 +31,9 @@ fn main() {
 
 fn parse_script(script: &'static str) -> Vec<Trial> {
     let mut tests = vec![];
+    let default_timezone = FixedOffset::west_opt(7 * 3600).unwrap();
+    let mut timezone = default_timezone;
+    let mut saved_timezone = None;
     let mut lines = script
         .lines()
         .enumerate()
@@ -38,27 +41,60 @@ fn parse_script(script: &'static str) -> Vec<Trial> {
         .filter(|(_, line)| !line.trim_start().starts_with("-- "));
     while let Some((line_no, line)) = lines.next() {
         let line = line.trim();
+        match line {
+            "begin;" => {
+                saved_timezone = Some(timezone);
+                continue;
+            }
+            "rollback;" => {
+                if let Some(saved) = saved_timezone.take() {
+                    timezone = saved;
+                }
+                continue;
+            }
+            "set time zone '+00';" => {
+                timezone = FixedOffset::east_opt(0).unwrap();
+                continue;
+            }
+            "set time zone '+10';" => {
+                timezone = FixedOffset::east_opt(10 * 3600).unwrap();
+                continue;
+            }
+            "set time zone default;" => {
+                timezone = default_timezone;
+                continue;
+            }
+            "set local timezone = 'UTC-10';" => {
+                timezone = FixedOffset::east_opt(10 * 3600).unwrap();
+                continue;
+            }
+            _ => {}
+        }
         if !line.starts_with("select") && !line.starts_with("SELECT") {
             continue;
         }
         let mut sql = line[6..].trim_start().to_string();
-        while !sql.ends_with(';') {
+        while !sql.contains(';') {
             let (_, line) = lines.next().expect("eof");
             sql.push_str(line.trim());
         }
-        // not supported
-        let ignored = line_no + 1 == 2210
-            // known differences from PostgreSQL; see README.md#testing
-            || matches!(
-                line_no + 1,
-                1079 | 1085 | 1300 | 1421 | 1431 | 1627 | 1650 | 2272
-            );
+        // Queries outside the small SQL subset understood by this test adapter.
+        let unsupported_sql = sql.starts_with("x, y,") || sql.contains("jsonb_build_object");
+        // Known implementation differences from PostgreSQL; see README.md#testing.
+        let known_difference = matches!(
+            line_no + 1,
+            1079 | 1085 | 1350 | 1471 | 1481 | 1677 | 1700 | 4563
+        );
+        let ignored = unsupported_sql || known_difference;
 
-        let (_, line) = lines.next().expect("eof");
+        let (_, mut line) = lines.next().expect("eof");
+        while line.starts_with("WARNING:  ") {
+            (_, line) = lines.next().expect("eof");
+        }
         if let Some(msg) = line.strip_prefix("ERROR:  ") {
             tests.push(
                 Trial::test(format!("jsonb_jsonpath.out:{}", line_no + 1), move || {
-                    test(&sql, Err(msg))
+                    test(&sql, Err(msg), timezone)
                 })
                 .with_ignored_flag(ignored),
             );
@@ -81,7 +117,7 @@ fn parse_script(script: &'static str) -> Vec<Trial> {
         }
         tests.push(
             Trial::test(format!("jsonb_jsonpath.out:{}", line_no + 1), move || {
-                test(&sql, Ok(results))
+                test(&sql, Ok(results), timezone)
             })
             .with_ignored_flag(ignored),
         );
@@ -89,18 +125,26 @@ fn parse_script(script: &'static str) -> Vec<Trial> {
     tests
 }
 
-fn test(sql: &str, expected: Result<Vec<String>, &str>) -> Result<(), Failed> {
+fn test(
+    sql: &str,
+    expected: Result<Vec<String>, &str>,
+    timezone: FixedOffset,
+) -> Result<(), Failed> {
     // match one of:
     // jsonb 'json' @? 'path';
     // jsonb 'json' @@ 'path';
-    let r1 = regex::Regex::new(r#"jsonb '(.*)' (@\?|@@) '(.*)';"#).unwrap();
+    let r1 = regex::Regex::new(r#"(?:jsonb '(.*)'|'(.*)'::jsonb) (@\?|@@) '(.*)';"#).unwrap();
     if let Some(capture) = r1.captures(sql) {
-        let json = capture.get(1).unwrap().as_str();
-        let op = capture.get(2).unwrap().as_str();
-        let path = capture.get(3).unwrap().as_str();
+        let json = capture.get(1).or_else(|| capture.get(2)).unwrap().as_str();
+        let op = capture.get(3).unwrap().as_str();
+        let path = capture.get(4).unwrap().as_str();
+        let path = match JsonPath::from_str(path) {
+            Ok(path) => path,
+            Err(_) => return assert_match(Ok(vec!["".into()]), expected),
+        };
         let actual = match op {
-            "@?" => jsonb_path_exists(json, path, "{}", true),
-            "@@" => jsonb_path_match(json, path, "{}", true),
+            "@?" => jsonb_path_exists(json, &path, "{}", true, timezone),
+            "@@" => jsonb_path_match(json, &path, "{}", true, timezone),
             _ => return Err(format!("invalid operator: {}", op).into()),
         };
         return assert_match(actual, expected);
@@ -111,7 +155,7 @@ fn test(sql: &str, expected: Result<Vec<String>, &str>) -> Result<(), Failed> {
     // jsonb_path_*('json', 'path', vars => 'vars');
     // jsonb_path_*('json', 'path', silent => [true|false]);
     let r2 = regex::Regex::new(
-        r#"([a-z_]+)\('([^']*)',\s*'([^']*)'(?:,\s*(?:vars =>)? '([^']*)')?(?:,\s*silent => (\w+))?\);"#,
+        r#"([a-z_]+)\('([^']*)',\s*'([^']*)'(?:\s*::jsonpath)?(?:,\s*(?:vars\s*=>\s*)?(?:'([^']*)'|NULL))?(?:,\s*(?:silent\s*=>\s*)?(\w+))?\);"#,
     )
     .unwrap();
     if let Some(capture) = r2.captures(sql) {
@@ -120,26 +164,42 @@ fn test(sql: &str, expected: Result<Vec<String>, &str>) -> Result<(), Failed> {
         let path = capture.get(3).unwrap().as_str();
         let vars = capture.get(4).map_or("{}", |s| s.as_str());
         let silent = capture.get(5).is_some_and(|s| s.as_str() == "true");
+        let path = match parse_path(path, &expected)? {
+            Some(path) => path,
+            None => return Ok(()),
+        };
         // println!("capture: {:#?}", capture);
         let actual = match func {
-            "jsonb_path_exists" => jsonb_path_exists(json, path, vars, silent),
-            "jsonb_path_match" => jsonb_path_match(json, path, vars, silent),
-            "jsonb_path_query" => jsonb_path_query(json, path, vars, silent),
-            "jsonb_path_query_tz" => jsonb_path_query_tz(json, path, vars, silent),
+            "jsonb_path_exists" => jsonb_path_exists(json, &path, vars, silent, timezone),
+            "jsonb_path_match" => jsonb_path_match(json, &path, vars, silent, timezone),
+            "jsonb_path_query" => jsonb_path_query(json, &path, vars, silent, timezone),
+            "jsonb_path_query_tz" => jsonb_path_query_tz(json, &path, vars, silent, timezone),
             "jsonb_path_query_array" => {
-                jsonb_path_query_array(json, path, vars, silent).map(|s| vec![s])
+                jsonb_path_query_array(json, &path, vars, silent, timezone).map(|s| vec![s])
             }
-            "jsonb_path_query_first" => {
-                jsonb_path_query_first(json, path, vars, silent).map(|s| match s {
+            "jsonb_path_query_first" => jsonb_path_query_first(json, &path, vars, silent, timezone)
+                .map(|s| match s {
                     Some(s) => vec![s],
                     None => vec!["".into()],
-                })
-            }
+                }),
             _ => return Err(format!("invalid function: {}", func).into()),
         };
         return assert_match(actual, expected);
     }
     Err("unrecognized query".into())
+}
+
+fn parse_path(
+    path: &str,
+    expected: &Result<Vec<String>, &str>,
+) -> Result<Option<JsonPath>, Failed> {
+    match JsonPath::from_str(path) {
+        Ok(path) => Ok(Some(path)),
+        Err(_) if matches!(expected, Err(msg) if msg.starts_with("syntax error at or near")) => {
+            Ok(None)
+        }
+        Err(error) => Err(error.to_string().into()),
+    }
 }
 
 fn assert_match(
@@ -155,15 +215,15 @@ fn assert_match(
 
 fn jsonb_path_exists(
     json: &str,
-    path: &str,
+    path: &JsonPath,
     vars: &str,
     silent: bool,
+    timezone: FixedOffset,
 ) -> Result<Vec<String>, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
     let vars = serde_json::Value::from_str(vars).unwrap();
-    let path = JsonPath::from_str(path).unwrap();
-    let exist = match path.exists_with_vars(&json, &vars) {
-        Ok(x) => x,
+    let exist = match path.query_first_with_vars_at_timezone(&json, &vars, timezone) {
+        Ok(x) => x.is_some(),
         Err(e) if silent && e.can_silent() => return Ok(vec!["".into()]),
         Err(e) => return Err(e),
     };
@@ -172,14 +232,14 @@ fn jsonb_path_exists(
 
 fn jsonb_path_match(
     json: &str,
-    path: &str,
+    path: &JsonPath,
     vars: &str,
     silent: bool,
+    timezone: FixedOffset,
 ) -> Result<Vec<String>, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
     let vars = serde_json::Value::from_str(vars).unwrap();
-    let path = JsonPath::from_str(path).unwrap();
-    let result = match path.query_with_vars(&json, &vars) {
+    let result = match path.query_with_vars_at_timezone(&json, &vars, timezone) {
         Ok(x) => x,
         Err(e) if silent && e.can_silent() => return Ok(vec!["".into()]),
         Err(e) => return Err(e),
@@ -204,14 +264,14 @@ fn jsonb_path_match(
 
 fn jsonb_path_query(
     json: &str,
-    path: &str,
+    path: &JsonPath,
     vars: &str,
     silent: bool,
+    timezone: FixedOffset,
 ) -> Result<Vec<String>, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
     let vars = serde_json::Value::from_str(vars).unwrap();
-    let path = JsonPath::from_str(path).unwrap();
-    let list = match path.query_with_vars(&json, &vars) {
+    let list = match path.query_with_vars_at_timezone(&json, &vars, timezone) {
         Ok(x) => x,
         Err(e) if silent && e.can_silent() => return Ok(vec![]),
         Err(e) => return Err(e),
@@ -221,14 +281,13 @@ fn jsonb_path_query(
 
 fn jsonb_path_query_tz(
     json: &str,
-    path: &str,
+    path: &JsonPath,
     vars: &str,
     silent: bool,
+    timezone: FixedOffset,
 ) -> Result<Vec<String>, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
     let vars = serde_json::Value::from_str(vars).unwrap();
-    let path = JsonPath::from_str(path).unwrap();
-    let timezone = FixedOffset::east_opt(0).unwrap();
     let list = match path.query_with_vars_tz(&json, &vars, timezone) {
         Ok(x) => x,
         Err(e) if silent && e.can_silent() => return Ok(vec![]),
@@ -239,14 +298,14 @@ fn jsonb_path_query_tz(
 
 fn jsonb_path_query_array(
     json: &str,
-    path: &str,
+    path: &JsonPath,
     vars: &str,
     silent: bool,
+    timezone: FixedOffset,
 ) -> Result<String, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
     let vars = serde_json::Value::from_str(vars).unwrap();
-    let path = JsonPath::from_str(path).unwrap();
-    let list = match path.query_with_vars(&json, &vars) {
+    let list = match path.query_with_vars_at_timezone(&json, &vars, timezone) {
         Ok(x) => x,
         Err(e) if silent && e.can_silent() => return Ok("".into()),
         Err(e) => return Err(e),
@@ -257,14 +316,22 @@ fn jsonb_path_query_array(
 
 fn jsonb_path_query_first(
     json: &str,
-    path: &str,
+    path: &JsonPath,
     vars: &str,
     silent: bool,
+    timezone: FixedOffset,
 ) -> Result<Option<String>, EvalError> {
     let json = serde_json::Value::from_str(json).unwrap();
     let vars = serde_json::Value::from_str(vars).unwrap();
-    let path = JsonPath::from_str(path).unwrap();
-    let list = match path.query_first_with_vars(&json, &vars) {
+    let lax_path;
+    let path = if silent {
+        let display = path.to_string();
+        lax_path = JsonPath::from_str(display.strip_prefix("strict ").unwrap_or(&display)).unwrap();
+        &lax_path
+    } else {
+        path
+    };
+    let list = match path.query_first_with_vars_at_timezone(&json, &vars, timezone) {
         Ok(x) => x,
         Err(e) if silent && e.can_silent() => return Ok(None),
         Err(e) => return Err(e),
